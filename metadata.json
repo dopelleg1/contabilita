@@ -1,0 +1,6 @@
+{
+  "name": "Gestione Budget Personale e Professionale P.IVA",
+  "description": "Un sistema completo per gestire conti correnti, carte di credito, contanti e finanziamenti, separando ordinatamente budget personale (spese necessarie, utili e tempo libero) e professionale in regime forfettario (spese necessarie e utili). Supporta importazione/esportazione di transazioni bancarie, regole automatiche basate su intelligenza artificiale Gemini, gestione trasferimenti integrata e simulazione di sincronizzazione bancaria automatica.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

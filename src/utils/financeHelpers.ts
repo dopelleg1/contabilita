@@ -115,6 +115,21 @@ export function applyLocalRules(description: string, rules: AutoRule[]): { scope
   }
 
   // Broad fallbacks
+  // Check Unipol Tech / Telepass first so it doesn't match broder "UNIPOL" insurance
+  if (upperDesc.includes('UNIPOL TECH') || upperDesc.includes('UNIPOLTECH') || upperDesc.includes('TELEPASS') || upperDesc.includes('UNIPOL MOVE') || upperDesc.includes('UNIPOLMOVE')) {
+    return { scope: 'personal', category: 'utili', subcategory: 'Autostrada & Pedaggi' };
+  }
+
+  // Check Agos Ducato financing
+  if (upperDesc.includes('AGOS') || upperDesc.includes('DUCATO')) {
+    return { scope: 'personal', category: 'necessarie', subcategory: 'Finanziamento' };
+  }
+
+  // Check Carburante / Distributore / Tamoil / petrol stations
+  if (upperDesc.includes('CARBURANTE') || upperDesc.includes('BENZINA') || upperDesc.includes('GASOLIO') || upperDesc.includes('DISTRIBUTORE') || upperDesc.includes('TAMOIL') || upperDesc.includes('Q8') || upperDesc.includes('ENI STATION') || upperDesc.includes('IP ') || upperDesc.includes(' IP') || upperDesc.includes('ESSO') || upperDesc.includes('SHELL') || upperDesc.includes('TOTAL') || upperDesc.includes('REPSOL') || upperDesc.includes('STAZIONE SERVIZIO')) {
+    return { scope: 'personal', category: 'utili', subcategory: 'Carburante' };
+  }
+
   if (upperDesc.includes('BANCO BPM') || upperDesc.includes('BPM') || upperDesc.includes('FIAT TIPO') || upperDesc.includes('STRADA MONTI') || upperDesc.includes('STRADA AI MONTI') || upperDesc.includes('GIROCONTO') || upperDesc.includes('TRASFERIMENTO') || upperDesc.includes('TRANSFER')) {
     return { scope: 'personal', category: 'necessarie', subcategory: 'Giroconto' };
   }
@@ -135,9 +150,6 @@ export function applyLocalRules(description: string, rules: AutoRule[]): { scope
   }
   if (upperDesc.includes('ASSICURAZIONE') || upperDesc.includes('POLIZZA') || upperDesc.includes('RSA') || upperDesc.includes('UNIPOL') || upperDesc.includes('GENERALI') || upperDesc.includes('ALLIANZ')) {
     return { scope: 'personal', category: 'utili', subcategory: 'Assicurazioni' };
-  }
-  if (upperDesc.includes('CARBURANTE') || upperDesc.includes('BENZINA') || upperDesc.includes('GASOLIO') || upperDesc.includes('DISTRIBUTORE') || upperDesc.includes('Q8') || upperDesc.includes('ENI STATION') || upperDesc.includes('IP ')) {
-    return { scope: 'personal', category: 'utili', subcategory: 'Carburante' };
   }
   if (upperDesc.includes('MANUTENZIONE') || upperDesc.includes('OFFICINA') || upperDesc.includes('MECCANICO') || upperDesc.includes('TAGLIANDO') || upperDesc.includes('GOMMISTA') || upperDesc.includes('CARROZZIERE') || upperDesc.includes('AUTO')) {
     return { scope: 'personal', category: 'utili', subcategory: 'Manutenzione Auto' };

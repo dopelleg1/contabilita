@@ -63,6 +63,8 @@ export function initDb() {
       scope TEXT NOT NULL,
       category TEXT NOT NULL,
       subcategory TEXT NOT NULL,
+      accountId TEXT,
+      destinationAccountId TEXT,
       isDemo INTEGER DEFAULT 0
     );
   `);
@@ -88,6 +90,12 @@ export function initDb() {
   } catch (e) {}
   try {
     db.exec("ALTER TABLE rules ADD COLUMN isDemo INTEGER DEFAULT 0");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE rules ADD COLUMN accountId TEXT");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE rules ADD COLUMN destinationAccountId TEXT");
   } catch (e) {}
 
   // Update existing default records to be marked as Demo if they were initialized previously
@@ -122,7 +130,7 @@ export function initDb() {
     ];
 
     for (const a of initialAccounts) {
-      insertAcc.run(a.id, a.name, a.type, a.scope, a.balance, a.limit !== undefined ? a.limit : null, a.iban || '', a.notes || '');
+      insertAcc.run(a.id, a.name, a.type, a.scope, a.balance, a.limit !== undefined && a.limit !== null ? a.limit : null, a.iban || '', a.notes || '');
     }
   }
 
@@ -304,29 +312,33 @@ export const dbOps = {
   },
   addRule: (rule: any) => {
     db.prepare(`
-      INSERT INTO rules (id, name, keyword, scope, category, subcategory, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO rules (id, name, keyword, scope, category, subcategory, accountId, destinationAccountId, isDemo)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      rule.id, 
-      rule.name, 
-      rule.keyword, 
-      rule.scope, 
-      rule.category, 
+      rule.id,
+      rule.name,
+      rule.keyword,
+      rule.scope,
+      rule.category,
       rule.subcategory,
+      rule.accountId || null,
+      rule.destinationAccountId || null,
       rule.isDemo ? 1 : 0
     );
   },
   updateRule: (id: string, rule: any) => {
     db.prepare(`
-      UPDATE rules 
-      SET name = ?, keyword = ?, scope = ?, category = ?, subcategory = ?, isDemo = ?
+      UPDATE rules
+      SET name = ?, keyword = ?, scope = ?, category = ?, subcategory = ?, accountId = ?, destinationAccountId = ?, isDemo = ?
       WHERE id = ?
     `).run(
-      rule.name, 
-      rule.keyword, 
-      rule.scope, 
-      rule.category, 
-      rule.subcategory, 
+      rule.name,
+      rule.keyword,
+      rule.scope,
+      rule.category,
+      rule.subcategory,
+      rule.accountId || null,
+      rule.destinationAccountId || null,
       rule.isDemo ? 1 : 0,
       id
     );
@@ -529,4 +541,4 @@ export const dbOps = {
     db.pragma('foreign_keys = ON');
     console.log("Database file replaced and re-initialized successfully.");
   }
-};;
+};

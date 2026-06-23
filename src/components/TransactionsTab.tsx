@@ -397,7 +397,7 @@ export default function TransactionsTab({
   const getSubcategoryList = () => {
     if (scope === 'personal') {
       if (category === 'necessarie') return ['Alimentari', 'Affitto Casa', 'Bollette Luce/Gas', 'Mutuo / Prestiti', 'Salute', 'Spostamenti'];
-      if (category === 'utili') return ['Carburante', 'Autostrada & Pedaggi', 'Auto & Tagliandi', 'Abbonamento Treno', 'Corsi & Istruzione', 'Palestra', 'Associazioni'];
+      if (category === 'utili') return ['Auto & Tagliandi', 'Abbonamento Treno', 'Corsi & Istruzione', 'Palestra', 'Associazioni'];
       if (category === 'tempo_libero') return ['Ristoranti & Caffè', 'Cinema & Concerti', 'Vacanze & Hotel', 'Shopping & Moda', 'Hobby'];
       return ['Entrata Generica', 'Regalo', 'Stipendio'];
     } else {
@@ -431,7 +431,7 @@ export default function TransactionsTab({
   const getEditSubcategoryList = () => {
     if (editScope === 'personal') {
       if (editCategory === 'necessarie') return ['Alimentari', 'Affitto Casa', 'Bollette Luce/Gas', 'Mutuo / Prestiti', 'Salute', 'Spostamenti'];
-      if (editCategory === 'utili') return ['Carburante', 'Autostrada & Pedaggi', 'Auto & Tagliandi', 'Abbonamento Treno', 'Corsi & Istruzione', 'Palestra', 'Associazioni'];
+      if (editCategory === 'utili') return ['Auto & Tagliandi', 'Abbonamento Treno', 'Corsi & Istruzione', 'Palestra', 'Associazioni'];
       if (editCategory === 'tempo_libero') return ['Ristoranti & Caffè', 'Cinema & Concerti', 'Vacanze & Hotel', 'Shopping & Moda', 'Hobby'];
       return ['Entrata Generica', 'Regalo', 'Stipendio'];
     } else {

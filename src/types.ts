@@ -51,6 +51,8 @@ export interface AutoRule {
   scope: TransactionScope;
   category: PersonalCategory | ProfessionalCategory;
   subcategory: string;
+  accountId?: string; // Conto di origine, solo per regole di Giroconto/Trasferimento
+  destinationAccountId?: string; // Conto di destinazione, solo per regole di Giroconto/Trasferimento
   isDemo?: boolean;
 }
 
@@ -71,4 +73,3 @@ export interface Investment {
   currentValue: number;
   lastUpdated?: string;
 }
-

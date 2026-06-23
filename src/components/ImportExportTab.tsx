@@ -74,52 +74,6 @@ const isFinancingOrCreditCard = (name: string): boolean => {
   );
 };
 
-const isSmartAccountMatch = (rawName: string, accountName: string, accountIban?: string): boolean => {
-  if (!rawName || !accountName) return false;
-
-  const cleanRaw = rawName.toLowerCase().trim().replace(/[^a-z0-9]/g, ' ');
-  const cleanAcc = accountName.toLowerCase().trim().replace(/[^a-z0-9]/g, ' ');
-
-  // Direct includes check first
-  if (cleanRaw.includes(cleanAcc) || cleanAcc.includes(cleanRaw)) {
-    return true;
-  }
-
-  // If there's an IBAN check
-  if (accountIban) {
-    const cleanIban = accountIban.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-    const cleanRawUpper = rawName.toUpperCase();
-    if (cleanIban && cleanRawUpper.includes(cleanIban)) {
-      return true;
-    }
-    // Also check if rawName contains some IBAN-like structure and they overlap
-    const rawIbanMatch = cleanRawUpper.replace(/[^A-Z0-9]/g, '');
-    if (rawIbanMatch && cleanIban && (rawIbanMatch.includes(cleanIban) || cleanIban.includes(rawIbanMatch))) {
-      return true;
-    }
-  }
-
-  // Token word-overlap match (smart matching)
-  // Stopwords to ignore
-  const stopwords = new Set([
-    'spa', 's.p.a', 's.p.a.', 'sa', 's.a', 's.a.', 'srl', 's.r.l', 's.r.l.', 'cc', 'c/c', 'conto', 'corrente',
-    'completo', 'carta', 'credito', 'di', 'e', 'o', 'un', 'una', 'il', 'la', 'i', 'gli', 'le', 'privati', 'private',
-    'business', 'online', 'premium', 'gold', 'oro', 'argent', 'silver', 'cash', 'cassa', 'europe', 's.a.,'
-  ]);
-
-  const rawTokens = cleanRaw.split(/\s+/).filter(t => t.length >= 2 && !stopwords.has(t));
-  const accTokens = cleanAcc.split(/\s+/).filter(t => t.length >= 2 && !stopwords.has(t));
-
-  if (rawTokens.length === 0 || accTokens.length === 0) return false;
-
-  // If we have at least one significant matching token of at least 3 chars (like "bpm", "satispay", "unicredit"), let's match!
-  const hasStrongTokenMatch = rawTokens.some(rt => {
-    return rt.length >= 3 && accTokens.includes(rt);
-  });
-
-  return hasStrongTokenMatch;
-};
-
 // Structure for rows ready for smart validation
 interface ParsedWizardRow {
   id: string;
@@ -826,7 +780,9 @@ export default function ImportExportTab({
           
           if (isInvalid || isFirstFallback) {
             const matchedAcc = accounts.find(a => 
-              isSmartAccountMatch(rawName, a.name, a.iban)
+              a.name.toLowerCase().includes(rawName.toLowerCase()) || 
+              rawName.toLowerCase().includes(a.name.toLowerCase()) ||
+              (a.iban && a.iban.toLowerCase().includes(rawName.toLowerCase()))
             );
             if (matchedAcc && matchedAcc.id !== currentMappedId) {
               updated[rawName] = matchedAcc.id;
@@ -1046,7 +1002,9 @@ export default function ImportExportTab({
     uniqueRawAccs.forEach(rawName => {
       // Find matching bank by containing name strings
       const match = accounts.find(a => 
-        isSmartAccountMatch(rawName, a.name, a.iban)
+        a.name.toLowerCase().includes(rawName.toLowerCase()) || 
+        rawName.toLowerCase().includes(a.name.toLowerCase()) ||
+        a.iban?.toLowerCase().includes(rawName.toLowerCase())
       );
       if (match) {
         initialMappings[rawName] = match.id;

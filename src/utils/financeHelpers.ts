@@ -102,14 +102,16 @@ export function calculateForfettario(
 }
 
 // Check local regex matching for transactions
-export function applyLocalRules(description: string, rules: AutoRule[]): { scope: 'personal' | 'professional', category: string, subcategory: string } | null {
+export function applyLocalRules(description: string, rules: AutoRule[]): { scope: 'personal' | 'professional', category: string, subcategory: string, accountId?: string, destinationAccountId?: string } | null {
   const upperDesc = description.toUpperCase();
   for (const rule of rules) {
     if (upperDesc.includes(rule.keyword.toUpperCase())) {
       return {
         scope: rule.scope,
         category: rule.category,
-        subcategory: rule.subcategory
+        subcategory: rule.subcategory,
+        accountId: rule.accountId,
+        destinationAccountId: rule.destinationAccountId
       };
     }
   }

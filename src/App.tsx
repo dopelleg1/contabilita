@@ -915,12 +915,18 @@ export default function App() {
       setTransactions(prev => {
         return prev.map(tx => {
           if (applyToTxIds.includes(tx.id)) {
+            const isTransfer = newRule.category === 'trasferimento' && newRule.accountId && newRule.destinationAccountId;
             const updated = {
               ...tx,
               scope: newRule.scope,
               category: newRule.category as any,
               subcategory: newRule.subcategory,
-              isAutoMatched: true
+              isAutoMatched: true,
+              ...(isTransfer ? {
+                type: 'transfer' as const,
+                accountId: newRule.accountId!,
+                destinationAccountId: newRule.destinationAccountId!
+              } : {})
             };
             
             // Save inside database
@@ -955,12 +961,18 @@ export default function App() {
         const match = applyLocalRules(tx.description, rules);
         if (match) {
           matchCount++;
+          const isTransfer = match.category === 'trasferimento' && match.accountId && match.destinationAccountId;
           const updated = {
             ...tx,
             scope: match.scope,
             category: match.category as any,
             subcategory: match.subcategory,
-            isAutoMatched: true
+            isAutoMatched: true,
+            ...(isTransfer ? {
+              type: 'transfer' as const,
+              accountId: match.accountId!,
+              destinationAccountId: match.destinationAccountId!
+            } : {})
           };
           changedTxs.push(updated);
           return updated;
@@ -1310,7 +1322,7 @@ export default function App() {
                   setShowProfileModal(true);
                 }}
                 className="flex items-center gap-3 text-left w-full hover:bg-slate-800/40 p-1.5 rounded-xl transition-all border border-transparent hover:border-slate-800/80 cursor-pointer"
-                title="Modifica profilo ditta / contribuente"
+                title="Modifica profil ditta / contribuente"
               >
                 <div className="w-9 h-9 bg-indigo-600 rounded-full border-2 border-slate-700 flex items-center justify-center font-bold text-white text-xs font-sans">
                   {taxpayerName.trim() ? taxpayerName.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2) : 'CF'}
@@ -1319,7 +1331,7 @@ export default function App() {
                   <p className="text-xs font-semibold text-white truncate max-w-[120px]" title={taxpayerName}>
                     {taxpayerName}
                   </p>
-                  <p className="text-[10px] text-slate-500 font-mono tracking-xs truncate max-w-[125px]" title={taxpayerCf}>
+                  <p className="text-[10px] text-slate-500 font-mono truncate max-w-[125px]" title={taxpayerCf}>
                     {taxpayerCf}
                   </p>
                 </div>
@@ -1380,11 +1392,11 @@ export default function App() {
                   ? 'bg-amber-50 text-amber-600 border-amber-100' 
                   : 'bg-emerald-50 text-emerald-600 border-emerald-100'
               }`}>
-                {isDemoMode ? <Database className="w-5 h-5 animate-pulse" /> : <ShieldCheck className="w-5 h-5 text-emerald-600" />}
+                {isDemoMode ? <Database className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5 text-emerald-600" />}
               </div>
               <div className="space-y-0.5 text-left">
                 <h3 className="text-xs font-bold text-slate-800 font-sans flex flex-wrap items-center gap-2">
-                  Archivio Database Attivo: {isDemoMode ? 'DIMOSTRATIVO (DEMO)' : 'II MIO CONTO REALE (P.IVA)'}
+                  Archivio Database Attivo: {isDemoMode ? 'DIMOSTRATIVO (DEMO)' : 'IL MIO CONTO REALE (P.IVA)'}
                   <span className={`text-[9.5px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide inline-block ${
                     isDemoMode ? 'bg-amber-100 text-amber-850' : 'bg-emerald-100 text-emerald-850'
                   }`}>
@@ -1488,9 +1500,10 @@ export default function App() {
           )}
 
           {activeTab === 'rules' && (
-            <RulesTab 
+            <RulesTab
               rules={filteredRules}
               transactions={filteredTransactions}
+              accounts={accounts}
               onAddRule={handleAddRule}
               onDeleteRule={handleDeleteRule}
               onRunRulesOnTransactions={handleRunRulesOnTransactions}
@@ -1547,7 +1560,7 @@ export default function App() {
                   type="text" 
                   value={profileNameInput}
                   onChange={(e) => setProfileNameInput(e.target.value)}
-                  className="w-full text-xs bg-white border border-slate-200 text-slate-800 roundedpx-2.5 py-2 px-3 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-550"
+                  className="w-full text-xs bg-white border border-slate-200 text-slate-800 rounded px-3 py-2 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   placeholder="es. Domenico Pellegrino"
                   required
                 />
@@ -1559,7 +1572,7 @@ export default function App() {
                   type="text" 
                   value={profileCfInput}
                   onChange={(e) => setProfileCfInput(e.target.value.toUpperCase())}
-                  className="w-full text-xs bg-white border border-slate-200 text-slate-800 font-mono rounded px-3 py-2 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-550 uppercase"
+                  className="w-full text-xs bg-white border border-slate-200 text-slate-800 font-mono rounded px-3 py-2 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 uppercase"
                   placeholder="es. PLLDNC60B14A494R"
                   maxLength={16}
                   required

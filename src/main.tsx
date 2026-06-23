@@ -1,7 +1,16 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import ErrorBoundary from './components/ErrorBoundary.tsx';
 import './index.css';
+
+// Intercetta ed evita di propagare messaggi generici "Script error." derivanti da estensioni del browser o iframe cross-origin
+window.addEventListener('error', (event) => {
+  if (event.message === 'Script error.') {
+    console.warn("[ContoSmart Logger] Intercettato Script error cross-origin generico ignorato per evitare crash.");
+    event.preventDefault();
+  }
+});
 
 // Rileva automaticamente e gestisce le sottocartelle (es. /wallet) su Hostinger intercettando le fetch globali verso /api/
 (() => {
@@ -31,6 +40,8 @@ import './index.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

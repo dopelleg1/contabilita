@@ -453,7 +453,9 @@ Attualmente ci sono **${unverifiedCount} movimenti da verificare**. È fondament
           </div>
           <div className="text-[9px] text-slate-500 border-t border-slate-50 pt-1.5 flex justify-between items-center">
             <span className="truncate">Finanziam. Mutuo, Compass, AMEX</span>
-            <HelpCircle className="w-3 h-3 text-slate-400 cursor-pointer" title="I prestiti e passività aperte riducono la base imponibile mobiliare ai fini del calcolo ISEE!" />
+            <span title="I prestiti e passività aperte riducono la base imponibile mobiliare ai fini del calcolo ISEE!">
+              <HelpCircle className="w-3 h-3 text-slate-400 cursor-pointer" />
+            </span>
           </div>
         </div>
 

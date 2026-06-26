@@ -1,0 +1,71 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Setting {
+  key   String  @id @db.VarChar(255)
+  value String? @db.Text
+
+  @@map("settings")
+}
+
+model Account {
+  id      String  @id @db.VarChar(255)
+  name    String  @db.VarChar(255)
+  type    String  @db.VarChar(255)
+  scope   String  @db.VarChar(255)
+  balance Float   @db.Double
+  limit   Float?  @db.Double
+  iban    String? @db.VarChar(255)
+  notes   String? @db.Text
+  isDemo  Boolean @default(false)
+
+  transactions Transaction[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id                   String  @id @db.VarChar(255)
+  date                 String  @db.VarChar(255)
+  description          String  @db.Text
+  amount               Float   @db.Double
+  type                 String  @db.VarChar(255)
+  accountId            String  @db.VarChar(255)
+  destinationAccountId String? @db.VarChar(255)
+  scope                String  @db.VarChar(255)
+  category             String  @db.VarChar(255)
+  subcategory          String  @db.VarChar(255)
+  isAutoMatched        Boolean @default(false)
+  ruleId               String? @db.VarChar(255)
+  isVerified           Boolean @default(false)
+  isDemo               Boolean @default(false)
+  linkedTransactionId  String? @db.VarChar(255)
+  notes                String? @db.Text
+  customer             String? @db.VarChar(255)
+  invoiceId            String? @db.VarChar(255)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+  @@index([accountId])
+}
+
+model Rule {
+  id                   String  @id @db.VarChar(255)
+  name                 String  @db.VarChar(255)
+  keyword              String  @db.VarChar(255)
+  scope                String  @db.VarChar(255)
+  category             String  @db.VarChar(255)
+  subcategory          String  @db.VarChar(255)
+  accountId            String? @db.VarChar(255)
+  destinationAccountId String? @db.VarChar(255)
+  isDemo               Boolean @default(false)
+
+  @@map("rules")
+}

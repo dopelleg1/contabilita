@@ -3,542 +3,523 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import Database from 'better-sqlite3';
-import path from 'path';
+import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
+import path from 'path';
 
-// Define DB path in the project root
+// Define database paths (SQLite fallbacks preserved only for backups)
 const dbPath = path.resolve(process.cwd(), 'database.db');
-export let db = new Database(dbPath);
 
-// Enable Foreign Key support
-db.pragma('foreign_keys = ON');
-
-// Initialize schema
-export function initDb() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      scope TEXT NOT NULL,
-      balance REAL NOT NULL,
-      "limit" REAL,
-      iban TEXT,
-      notes TEXT,
-      isDemo INTEGER DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      date TEXT NOT NULL,
-      description TEXT NOT NULL,
-      amount REAL NOT NULL,
-      type TEXT NOT NULL,
-      accountId TEXT NOT NULL,
-      destinationAccountId TEXT,
-      scope TEXT NOT NULL,
-      category TEXT NOT NULL,
-      subcategory TEXT NOT NULL,
-      isAutoMatched INTEGER DEFAULT 0,
-      ruleId TEXT,
-      isVerified INTEGER DEFAULT 0,
-      isDemo INTEGER DEFAULT 0,
-      linkedTransactionId TEXT,
-      notes TEXT,
-      customer TEXT,
-      invoiceId TEXT,
-      FOREIGN KEY(accountId) REFERENCES accounts(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS rules (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      keyword TEXT NOT NULL,
-      scope TEXT NOT NULL,
-      category TEXT NOT NULL,
-      subcategory TEXT NOT NULL,
-      accountId TEXT,
-      destinationAccountId TEXT,
-      isDemo INTEGER DEFAULT 0
-    );
-  `);
-
-  // Safe migrations to support isDemo column for older schemas
-  try {
-    db.exec("ALTER TABLE accounts ADD COLUMN isDemo INTEGER DEFAULT 0");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE transactions ADD COLUMN isDemo INTEGER DEFAULT 0");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE transactions ADD COLUMN linkedTransactionId TEXT");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE transactions ADD COLUMN notes TEXT");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE transactions ADD COLUMN customer TEXT");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE transactions ADD COLUMN invoiceId TEXT");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE rules ADD COLUMN isDemo INTEGER DEFAULT 0");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE rules ADD COLUMN accountId TEXT");
-  } catch (e) {}
-  try {
-    db.exec("ALTER TABLE rules ADD COLUMN destinationAccountId TEXT");
-  } catch (e) {}
-
-  // Update existing default records to be marked as Demo if they were initialized previously
-  try {
-    db.exec(`
-      UPDATE accounts SET isDemo = 1 WHERE id IN ('acc-1', 'acc-2', 'acc-3', 'acc-4');
-      UPDATE transactions SET isDemo = 1 WHERE id IN ('tx-1', 'tx-2', 'tx-3', 'tx-4', 'tx-5', 'tx-6', 'tx-7', 'tx-8', 'tx-9');
-      UPDATE rules SET isDemo = 1 WHERE id IN ('rule-1', 'rule-2', 'rule-3', 'rule-4');
-    `);
-  } catch (e) {}
-
-  // Seed default settings if empty
-  const hasSettings = db.prepare('SELECT count(*) as count FROM settings').get() as { count: number };
-  if (hasSettings.count === 0) {
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('taxpayer_name', 'Domenico Pellegrino');
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('taxpayer_cf', 'PLLDNC60B14A494R');
-  }
-
-  // Seed default accounts if empty
-  const hasAccounts = db.prepare('SELECT count(*) as count FROM accounts').get() as { count: number };
-  if (hasAccounts.count === 0) {
-    const insertAcc = db.prepare(`
-      INSERT INTO accounts (id, name, type, scope, balance, "limit", iban, notes, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `);
-    
-    const initialAccounts = [
-      { id: 'acc-1', name: 'Conto Corrente Unicredit', type: 'checking', scope: 'mixed', balance: 14500, iban: 'IT76C0200805000000123456789', notes: '' },
-      { id: 'acc-2', name: 'Carta di Credito AMEX Oro', type: 'credit_card', scope: 'mixed', balance: -850, limit: 3000, iban: '', notes: '' },
-      { id: 'acc-3', name: 'Cassa Contanti (Cash)', type: 'cash', scope: 'personal', balance: 340, limit: null, iban: '', notes: '' },
-      { id: 'acc-4', name: 'Finanziamento Auto (Compass)', type: 'financing', scope: 'personal', balance: -7200, limit: 12000, notes: 'Rata mensile di 250 € - Tasso 4.5%' }
-    ];
-
-    for (const a of initialAccounts) {
-      insertAcc.run(a.id, a.name, a.type, a.scope, a.balance, a.limit !== undefined && a.limit !== null ? a.limit : null, a.iban || '', a.notes || '');
-    }
-  }
-
-  // Seed default transactions if empty
-  const isCleared = db.prepare("SELECT value FROM settings WHERE key = 'transactions_cleared'").get() as { value: string } | undefined;
-  const isDemoDeleted = db.prepare("SELECT value FROM settings WHERE key = 'demo_transactions_deleted'").get() as { value: string } | undefined;
-  const hasTransactions = db.prepare('SELECT count(*) as count FROM transactions').get() as { count: number };
-  if (hasTransactions.count === 0 && (!isCleared || isCleared.value !== 'true') && (!isDemoDeleted || isDemoDeleted.value !== 'true')) {
-    const insertTx = db.prepare(`
-      INSERT INTO transactions (id, date, description, amount, type, accountId, destinationAccountId, scope, category, subcategory, isAutoMatched, ruleId, isVerified, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `);
-
-    const initialTransactions = [
-      { id: 'tx-1', date: '2026-05-18', description: 'BONIFICO SEPA DA CLIENTE INCOMING ACME CORPORATION SRL FATTURA 14', amount: 3200, type: 'income', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'entrate_lavoro', subcategory: 'Consulenza', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-2', date: '2026-05-17', description: 'ADDEBITO DIRETTO ENEL ENERGIA SPA - UTENZE STUDIO', amount: -185.40, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Utenze', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-3', date: '2026-05-16', description: 'CONAD SUPERMERCATO BOLOGNA SPESA SETTIMANALE', amount: -65.20, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'necessarie', subcategory: 'Alimentari', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-4', date: '2026-05-15', description: 'RATA MENSILE FINANZIAMENTO COMPASS AUTO', amount: -250.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'necessarie', subcategory: 'Finanziamento', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-5', date: '2026-05-14', description: 'FATTURA N. 9 DEL COMMERCIALISTA STUDIO ROSSI & ASSOCIAZIONI', amount: -350.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Commercialista', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-6', date: '2026-05-12', description: 'CENA RISTORANTE CARLO CRACCO MILANO', amount: -180.00, type: 'expense', accountId: 'acc-2', destinationAccountId: null, scope: 'personal', category: 'tempo_libero', subcategory: 'Ristoranti', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-7', date: '2026-05-10', description: 'ACQUISTO LICENZA INTEGRALE JETBRAINS RIDER & WEBSTORM', amount: -150.00, type: 'expense', accountId: 'acc-2', destinationAccountId: null, scope: 'professional', category: 'utili_lavoro', subcategory: 'Software & Cloud', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-8', date: '2026-05-09', description: 'PRELIEVO CONTANTE BANCOMAT MILANO DUOMO', amount: -100.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'trasferimento', subcategory: 'Prelievo', isAutoMatched: 0, ruleId: null, isVerified: 0 },
-      { id: 'tx-9', date: '2026-05-09', description: 'DEPOSITO PRELIEVO CONTANTE BANCOMAT MILANO DUOMO', amount: 100.00, type: 'income', accountId: 'acc-3', destinationAccountId: null, scope: 'personal', category: 'trasferimento', subcategory: 'Prelievo', isAutoMatched: 0, ruleId: null, isVerified: 0 }
-    ];
-
-    for (const t of initialTransactions) {
-      insertTx.run(t.id, t.date, t.description, t.amount, t.type, t.accountId, t.destinationAccountId, t.scope, t.category, t.subcategory, t.isAutoMatched, t.ruleId, t.isVerified);
-    }
-  }
-
-  // Seed default rules if empty
-  const hasRules = db.prepare('SELECT count(*) as count FROM rules').get() as { count: number };
-  if (hasRules.count === 0) {
-    const insertRule = db.prepare(`
-      INSERT INTO rules (id, name, keyword, scope, category, subcategory, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-    `);
-
-    const initialRules = [
-      { id: 'rule-1', name: 'Spesa Conad', keyword: 'CONAD', scope: 'personal', category: 'necessarie', subcategory: 'Alimentari' },
-      { id: 'rule-2', name: 'Bolletta Enel Studio', keyword: 'ENEL ENERGIA', scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Utenze' },
-      { id: 'rule-3', name: 'Rata Compass', keyword: 'COMPASS', scope: 'personal', category: 'necessarie', subcategory: 'Finanziamento' },
-      { id: 'rule-4', name: 'Licenze Software Professionali', keyword: 'JETBRAINS', scope: 'professional', category: 'utili_lavoro', subcategory: 'Software & Cloud' }
-    ];
-
-    for (const r of initialRules) {
-      insertRule.run(r.id, r.name, r.keyword, r.scope, r.category, r.subcategory);
-    }
-  }
-}
+export const prisma = new PrismaClient();
 
 // Convert SQLite integers (0/1) to real booleans (false/true)
-function mapSqlRowToModel(row: any) {
+// Not strictly needed for Prisma queries as they map to real booleans,
+// but preserved as a safe utility to maintain absolute compatibility with other service layers.
+function mapRowBooleans(row: any) {
   if (!row) return row;
   return {
     ...row,
-    isDemo: row.isDemo === 1,
-    isAutoMatched: row.isAutoMatched === 1,
-    isVerified: row.isVerified === 1
+    isDemo: row.isDemo === true || row.isDemo === 1,
+    isAutoMatched: row.isAutoMatched === true || row.isAutoMatched === 1,
+    isVerified: row.isVerified === true || row.isVerified === 1
   };
+}
+
+// Initialize schema seeding
+export async function initDb() {
+  try {
+    // 1. Seed default settings if empty
+    const settingsCount = await prisma.setting.count();
+    if (settingsCount === 0) {
+      await prisma.setting.createMany({
+        data: [
+          { key: 'taxpayer_name', value: 'Domenico Pellegrino' },
+          { key: 'taxpayer_cf', value: 'PLLDNC60B14A494R' }
+        ]
+      });
+    }
+
+    // 2. Seed default accounts if empty
+    const accountsCount = await prisma.account.count();
+    if (accountsCount === 0) {
+      const initialAccounts = [
+        { id: 'acc-1', name: 'Conto Corrente Unicredit', type: 'checking', scope: 'mixed', balance: 14500, iban: 'IT76C0200805000000123456789', notes: '', isDemo: true },
+        { id: 'acc-2', name: 'Carta di Credito AMEX Oro', type: 'credit_card', scope: 'mixed', balance: -850, limit: 3000, iban: '', notes: '', isDemo: true },
+        { id: 'acc-3', name: 'Cassa Contanti (Cash)', type: 'cash', scope: 'personal', balance: 340, limit: null, iban: '', notes: '', isDemo: true },
+        { id: 'acc-4', name: 'Finanziamento Auto (Compass)', type: 'financing', scope: 'personal', balance: -7200, limit: 12000, notes: 'Rata mensile di 250 € - Tasso 4.5%', isDemo: true }
+      ];
+      await prisma.account.createMany({ data: initialAccounts });
+    }
+
+    // 3. Seed default transactions if empty
+    const isCleared = await prisma.setting.findUnique({ where: { key: 'transactions_cleared' } });
+    const isDemoDeleted = await prisma.setting.findUnique({ where: { key: 'demo_transactions_deleted' } });
+    const transactionsCount = await prisma.transaction.count();
+    if (transactionsCount === 0 && (!isCleared || isCleared.value !== 'true') && (!isDemoDeleted || isDemoDeleted.value !== 'true')) {
+      const initialTransactions = [
+        { id: 'tx-1', date: '2026-05-18', description: 'BONIFICO SEPA DA CLIENTE INCOMING ACME CORPORATION SRL FATTURA 14', amount: 3200, type: 'income', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'entrate_lavoro', subcategory: 'Consulenza', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-2', date: '2026-05-17', description: 'ADDEBITO DIRETTO ENEL ENERGIA SPA - UTENZE STUDIO', amount: -185.40, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Utenze', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-3', date: '2026-05-16', description: 'CONAD SUPERMERCATO BOLOGNA SPESA SETTIMANALE', amount: -65.20, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'necessarie', subcategory: 'Alimentari', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-4', date: '2026-05-15', description: 'RATA MENSILE FINANZIAMENTO COMPASS AUTO', amount: -250.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'necessarie', subcategory: 'Finanziamento', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-5', date: '2026-05-14', description: 'FATTURA N. 9 DEL COMMERCIALISTA STUDIO ROSSI & ASSOCIAZIONI', amount: -350.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Commercialista', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-6', date: '2026-05-12', description: 'CENA RISTORANTE CARLO CRACCO MILANO', amount: -180.00, type: 'expense', accountId: 'acc-2', destinationAccountId: null, scope: 'personal', category: 'tempo_libero', subcategory: 'Ristoranti', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-7', date: '2026-05-10', description: 'ACQUISTO LICENZA INTEGRALE JETBRAINS RIDER & WEBSTORM', amount: -150.00, type: 'expense', accountId: 'acc-2', destinationAccountId: null, scope: 'professional', category: 'utili_lavoro', subcategory: 'Software & Cloud', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-8', date: '2026-05-09', description: 'PRELIEVO CONTANTE BANCOMAT MILANO DUOMO', amount: -100.00, type: 'expense', accountId: 'acc-1', destinationAccountId: null, scope: 'personal', category: 'trasferimento', subcategory: 'Prelievo', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true },
+        { id: 'tx-9', date: '2026-05-09', description: 'DEPOSITO PRELIEVO CONTANTE BANCOMAT MILANO DUOMO', amount: 100.00, type: 'income', accountId: 'acc-3', destinationAccountId: null, scope: 'personal', category: 'trasferimento', subcategory: 'Prelievo', isAutoMatched: false, ruleId: null, isVerified: false, isDemo: true }
+      ];
+      await prisma.transaction.createMany({ data: initialTransactions });
+    }
+
+    // 4. Seed default rules if empty
+    const rulesCount = await prisma.rule.count();
+    if (rulesCount === 0) {
+      const initialRules = [
+        { id: 'rule-1', name: 'Spesa Conad', keyword: 'CONAD', scope: 'personal', category: 'necessarie', subcategory: 'Alimentari', isDemo: true },
+        { id: 'rule-2', name: 'Bolletta Enel Studio', keyword: 'ENEL ENERGIA', scope: 'professional', category: 'necessarie_lavoro', subcategory: 'Utenze', isDemo: true },
+        { id: 'rule-3', name: 'Rata Compass', keyword: 'COMPASS', scope: 'personal', category: 'necessarie', subcategory: 'Finanziamento', isDemo: true },
+        { id: 'rule-4', name: 'Licenze Software Professionali', keyword: 'JETBRAINS', scope: 'professional', category: 'utili_lavoro', subcategory: 'Software & Cloud', isDemo: true }
+      ];
+      await prisma.rule.createMany({ data: initialRules });
+    }
+  } catch (error) {
+    console.error("Errore durante l'inizializzazione del database:", error);
+  }
 }
 
 export const dbOps = {
   // Settings
-  getSetting: (key: string): string | null => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  getSetting: async (key: string): Promise<string | null> => {
+    const row = await prisma.setting.findUnique({ where: { key } });
     return row ? row.value : null;
   },
-  setSetting: (key: string, value: string) => {
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+  setSetting: async (key: string, value: string): Promise<void> => {
+    await prisma.setting.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value }
+    });
   },
 
   // Accounts
-  getAccounts: () => {
-    const rows = db.prepare('SELECT * FROM accounts').all();
-    return rows.map(mapSqlRowToModel);
+  getAccounts: async () => {
+    const rows = await prisma.account.findMany();
+    return rows.map(mapRowBooleans);
   },
-  addAccount: (acc: any) => {
-    db.prepare(`
-      INSERT INTO accounts (id, name, type, scope, balance, "limit", iban, notes, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      acc.id, 
-      acc.name, 
-      acc.type, 
-      acc.scope, 
-      acc.balance, 
-      acc.limit !== undefined && acc.limit !== null ? acc.limit : null, 
-      acc.iban || '', 
-      acc.notes || '',
-      acc.isDemo ? 1 : 0
-    );
+  addAccount: async (acc: any) => {
+    await prisma.account.create({
+      data: {
+        id: acc.id,
+        name: acc.name,
+        type: acc.type,
+        scope: acc.scope,
+        balance: acc.balance,
+        limit: acc.limit !== undefined && acc.limit !== null ? acc.limit : null,
+        iban: acc.iban || '',
+        notes: acc.notes || '',
+        isDemo: acc.isDemo === true || acc.isDemo === 1
+      }
+    });
   },
-  updateAccount: (id: string, acc: any) => {
-    db.prepare(`
-      UPDATE accounts 
-      SET name = ?, type = ?, scope = ?, balance = ?, "limit" = ?, iban = ?, notes = ?, isDemo = ?
-      WHERE id = ?
-    `).run(
-      acc.name, 
-      acc.type, 
-      acc.scope, 
-      acc.balance, 
-      acc.limit !== undefined && acc.limit !== null ? acc.limit : null, 
-      acc.iban || '', 
-      acc.notes || '', 
-      acc.isDemo ? 1 : 0,
-      id
-    );
+  updateAccount: async (id: string, acc: any) => {
+    await prisma.account.update({
+      where: { id },
+      data: {
+        name: acc.name,
+        type: acc.type,
+        scope: acc.scope,
+        balance: acc.balance,
+        limit: acc.limit !== undefined && acc.limit !== null ? acc.limit : null,
+        iban: acc.iban || '',
+        notes: acc.notes || '',
+        isDemo: acc.isDemo === true || acc.isDemo === 1
+      }
+    });
   },
-  deleteAccount: (id: string) => {
-    db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+  deleteAccount: async (id: string) => {
+    await prisma.account.delete({ where: { id } });
   },
 
   // Transactions
-  getTransactions: () => {
-    const rows = db.prepare('SELECT * FROM transactions ORDER BY date DESC, id DESC').all();
-    return rows.map(mapSqlRowToModel);
+  getTransactions: async () => {
+    const rows = await prisma.transaction.findMany({
+      orderBy: [
+        { date: 'desc' },
+        { id: 'desc' }
+      ]
+    });
+    return rows.map(mapRowBooleans);
   },
-  addTransaction: (tx: any) => {
-    db.prepare(`
-      INSERT INTO transactions (id, date, description, amount, type, accountId, destinationAccountId, scope, category, subcategory, isAutoMatched, ruleId, isVerified, isDemo, linkedTransactionId, notes, customer, invoiceId)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      tx.id, 
-      tx.date, 
-      tx.description, 
-      tx.amount, 
-      tx.type, 
-      tx.accountId, 
-      tx.destinationAccountId !== undefined && tx.destinationAccountId !== null ? tx.destinationAccountId : null, 
-      tx.scope, 
-      tx.category, 
-      tx.subcategory, 
-      tx.isAutoMatched ? 1 : 0, 
-      tx.ruleId !== undefined && tx.ruleId !== null ? tx.ruleId : null, 
-      tx.isVerified ? 1 : 0,
-      tx.isDemo ? 1 : 0,
-      tx.linkedTransactionId !== undefined && tx.linkedTransactionId !== null ? tx.linkedTransactionId : null,
-      tx.notes !== undefined && tx.notes !== null ? tx.notes : null,
-      tx.customer !== undefined && tx.customer !== null ? tx.customer : null,
-      tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null
-    );
+  addTransaction: async (tx: any) => {
+    await prisma.transaction.create({
+      data: {
+        id: tx.id,
+        date: tx.date,
+        description: tx.description,
+        amount: tx.amount,
+        type: tx.type,
+        accountId: tx.accountId,
+        destinationAccountId: tx.destinationAccountId !== undefined && tx.destinationAccountId !== null ? tx.destinationAccountId : null,
+        scope: tx.scope,
+        category: tx.category,
+        subcategory: tx.subcategory,
+        isAutoMatched: tx.isAutoMatched === true || tx.isAutoMatched === 1,
+        ruleId: tx.ruleId !== undefined && tx.ruleId !== null ? tx.ruleId : null,
+        isVerified: tx.isVerified === true || tx.isVerified === 1,
+        isDemo: tx.isDemo === true || tx.isDemo === 1,
+        linkedTransactionId: tx.linkedTransactionId !== undefined && tx.linkedTransactionId !== null ? tx.linkedTransactionId : null,
+        notes: tx.notes !== undefined && tx.notes !== null ? tx.notes : null,
+        customer: tx.customer !== undefined && tx.customer !== null ? tx.customer : null,
+        invoiceId: tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null
+      }
+    });
   },
-  updateTransaction: (id: string, tx: any) => {
-    db.prepare(`
-      UPDATE transactions 
-      SET date = ?, description = ?, amount = ?, type = ?, accountId = ?, destinationAccountId = ?, scope = ?, category = ?, subcategory = ?, isAutoMatched = ?, ruleId = ?, isVerified = ?, isDemo = ?, linkedTransactionId = ?, notes = ?, customer = ?, invoiceId = ?
-      WHERE id = ?
-    `).run(
-      tx.date, 
-      tx.description, 
-      tx.amount, 
-      tx.type, 
-      tx.accountId, 
-      tx.destinationAccountId !== undefined && tx.destinationAccountId !== null ? tx.destinationAccountId : null, 
-      tx.scope, 
-      tx.category, 
-      tx.subcategory, 
-      tx.isAutoMatched ? 1 : 0, 
-      tx.ruleId !== undefined && tx.ruleId !== null ? tx.ruleId : null, 
-      tx.isVerified ? 1 : 0,
-      tx.isDemo ? 1 : 0,
-      tx.linkedTransactionId !== undefined && tx.linkedTransactionId !== null ? tx.linkedTransactionId : null,
-      tx.notes !== undefined && tx.notes !== null ? tx.notes : null,
-      tx.customer !== undefined && tx.customer !== null ? tx.customer : null,
-      tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null,
-      id
-    );
+  updateTransaction: async (id: string, tx: any) => {
+    await prisma.transaction.update({
+      where: { id },
+      data: {
+        date: tx.date,
+        description: tx.description,
+        amount: tx.amount,
+        type: tx.type,
+        accountId: tx.accountId,
+        destinationAccountId: tx.destinationAccountId !== undefined && tx.destinationAccountId !== null ? tx.destinationAccountId : null,
+        scope: tx.scope,
+        category: tx.category,
+        subcategory: tx.subcategory,
+        isAutoMatched: tx.isAutoMatched === true || tx.isAutoMatched === 1,
+        ruleId: tx.ruleId !== undefined && tx.ruleId !== null ? tx.ruleId : null,
+        isVerified: tx.isVerified === true || tx.isVerified === 1,
+        isDemo: tx.isDemo === true || tx.isDemo === 1,
+        linkedTransactionId: tx.linkedTransactionId !== undefined && tx.linkedTransactionId !== null ? tx.linkedTransactionId : null,
+        notes: tx.notes !== undefined && tx.notes !== null ? tx.notes : null,
+        customer: tx.customer !== undefined && tx.customer !== null ? tx.customer : null,
+        invoiceId: tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null
+      }
+    });
   },
-  deleteTransaction: (id: string) => {
-    db.prepare('DELETE FROM transactions WHERE id = ?').run(id);
+  deleteTransaction: async (id: string) => {
+    await prisma.transaction.delete({ where: { id } });
   },
 
   // Rules
-  getRules: () => {
-    const rows = db.prepare('SELECT * FROM rules').all();
-    return rows.map(mapSqlRowToModel);
+  getRules: async () => {
+    const rows = await prisma.rule.findMany();
+    return rows.map(mapRowBooleans);
   },
-  addRule: (rule: any) => {
-    db.prepare(`
-      INSERT INTO rules (id, name, keyword, scope, category, subcategory, accountId, destinationAccountId, isDemo)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      rule.id,
-      rule.name,
-      rule.keyword,
-      rule.scope,
-      rule.category,
-      rule.subcategory,
-      rule.accountId || null,
-      rule.destinationAccountId || null,
-      rule.isDemo ? 1 : 0
-    );
-  },
-  updateRule: (id: string, rule: any) => {
-    db.prepare(`
-      UPDATE rules
-      SET name = ?, keyword = ?, scope = ?, category = ?, subcategory = ?, accountId = ?, destinationAccountId = ?, isDemo = ?
-      WHERE id = ?
-    `).run(
-      rule.name,
-      rule.keyword,
-      rule.scope,
-      rule.category,
-      rule.subcategory,
-      rule.accountId || null,
-      rule.destinationAccountId || null,
-      rule.isDemo ? 1 : 0,
-      id
-    );
-  },
-  deleteRule: (id: string) => {
-    db.prepare('DELETE FROM rules WHERE id = ?').run(id);
-  },
-
-  // Reset helper
-  clearAllTransactions: () => {
-    db.prepare('DELETE FROM transactions WHERE isDemo = 0').run();
-    db.prepare('UPDATE accounts SET balance = 0 WHERE isDemo = 0').run();
-    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('transactions_cleared', 'true')").run();
-  },
-
-  resetAllDb: () => {
-    db.prepare('DELETE FROM transactions').run();
-    db.prepare('DELETE FROM accounts').run();
-    db.prepare('DELETE FROM rules').run();
-    db.prepare('DELETE FROM settings').run();
-  },
-
-  getAllSettings: () => {
-    return db.prepare('SELECT * FROM settings').all();
-  },
-
-  importAllData: (data: { accounts: any[]; transactions: any[]; rules: any[]; settings?: { key: string; value: string }[] }) => {
-    const transaction = db.transaction(() => {
-      // Clear all
-      db.prepare('DELETE FROM transactions').run();
-      db.prepare('DELETE FROM accounts').run();
-      db.prepare('DELETE FROM rules').run();
-      db.prepare('DELETE FROM settings').run();
-
-      // Insert Settings
-      if (data.settings && Array.isArray(data.settings)) {
-        const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
-        for (const s of data.settings) {
-          insertSetting.run(s.key, s.value);
-        }
-      }
-
-      // Insert Accounts
-      if (data.accounts && Array.isArray(data.accounts)) {
-        const insertAcc = db.prepare(`
-          INSERT INTO accounts (id, name, type, scope, balance, "limit", iban, notes, isDemo)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const a of data.accounts) {
-          insertAcc.run(a.id, a.name, a.type, a.scope, a.balance, a.limit !== undefined && a.limit !== null ? a.limit : null, a.iban || '', a.notes || '', a.isDemo ? 1 : 0);
-        }
-      }
-
-      // Insert Rules
-      if (data.rules && Array.isArray(data.rules)) {
-        const insertRule = db.prepare(`
-          INSERT INTO rules (id, name, keyword, scope, category, subcategory, isDemo)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const r of data.rules) {
-          insertRule.run(r.id, r.name, r.keyword, r.scope, r.category, r.subcategory, r.isDemo ? 1 : 0);
-        }
-      }
-
-      // Insert Transactions
-      if (data.transactions && Array.isArray(data.transactions)) {
-        const insertTx = db.prepare(`
-          INSERT INTO transactions (id, date, description, amount, type, accountId, destinationAccountId, scope, category, subcategory, isAutoMatched, ruleId, isVerified, isDemo, notes, customer, invoiceId)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const t of data.transactions) {
-          insertTx.run(
-            t.id, 
-            t.date, 
-            t.description, 
-            t.amount, 
-            t.type, 
-            t.accountId, 
-            t.destinationAccountId !== undefined && t.destinationAccountId !== null ? t.destinationAccountId : null, 
-            t.scope, 
-            t.category, 
-            t.subcategory, 
-            t.isAutoMatched ? 1 : 0, 
-            t.ruleId !== undefined && t.ruleId !== null ? t.ruleId : null, 
-            t.isVerified ? 1 : 0,
-            t.isDemo ? 1 : 0,
-            t.notes || null,
-            t.customer || null,
-            t.invoiceId || null
-          );
-        }
+  addRule: async (rule: any) => {
+    await prisma.rule.create({
+      data: {
+        id: rule.id,
+        name: rule.name,
+        keyword: rule.keyword,
+        scope: rule.scope,
+        category: rule.category,
+        subcategory: rule.subcategory,
+        accountId: rule.accountId || null,
+        destinationAccountId: rule.destinationAccountId || null,
+        isDemo: rule.isDemo === true || rule.isDemo === 1
       }
     });
-    transaction();
+  },
+  updateRule: async (id: string, rule: any) => {
+    await prisma.rule.update({
+      where: { id },
+      data: {
+        name: rule.name,
+        keyword: rule.keyword,
+        scope: rule.scope,
+        category: rule.category,
+        subcategory: rule.subcategory,
+        accountId: rule.accountId || null,
+        destinationAccountId: rule.destinationAccountId || null,
+        isDemo: rule.isDemo === true || rule.isDemo === 1
+      }
+    });
+  },
+  deleteRule: async (id: string) => {
+    await prisma.rule.delete({ where: { id } });
   },
 
-  copyDemoToReal: () => {
-    const transaction = db.transaction(() => {
+  // Reset helpers
+  clearAllTransactions: async () => {
+    await prisma.transaction.deleteMany({ where: { isDemo: false } });
+    await prisma.account.updateMany({
+      where: { isDemo: false },
+      data: { balance: 0 }
+    });
+    await prisma.setting.upsert({
+      where: { key: 'transactions_cleared' },
+      update: { value: 'true' },
+      create: { key: 'transactions_cleared', value: 'true' }
+    });
+  },
+
+  resetAllDb: async () => {
+    await prisma.transaction.deleteMany();
+    await prisma.account.deleteMany();
+    await prisma.rule.deleteMany();
+    await prisma.setting.deleteMany();
+  },
+
+  getAllSettings: async () => {
+    return await prisma.setting.findMany();
+  },
+
+  importAllData: async (data: { accounts: any[]; transactions: any[]; rules: any[]; settings?: { key: string; value: string }[] }) => {
+    await prisma.$transaction(async (tx) => {
+      await tx.transaction.deleteMany();
+      await tx.account.deleteMany();
+      await tx.rule.deleteMany();
+      await tx.setting.deleteMany();
+
+      if (data.settings && Array.isArray(data.settings)) {
+        await tx.setting.createMany({ data: data.settings });
+      }
+
+      if (data.accounts && Array.isArray(data.accounts)) {
+        await tx.account.createMany({
+          data: data.accounts.map(a => ({
+            id: a.id,
+            name: a.name,
+            type: a.type,
+            scope: a.scope,
+            balance: a.balance,
+            limit: a.limit !== undefined && a.limit !== null ? a.limit : null,
+            iban: a.iban || '',
+            notes: a.notes || '',
+            isDemo: a.isDemo === true || a.isDemo === 1
+          }))
+        });
+      }
+
+      if (data.rules && Array.isArray(data.rules)) {
+        await tx.rule.createMany({
+          data: data.rules.map(r => ({
+            id: r.id,
+            name: r.name,
+            keyword: r.keyword,
+            scope: r.scope,
+            category: r.category,
+            subcategory: r.subcategory,
+            accountId: r.accountId || null,
+            destinationAccountId: r.destinationAccountId || null,
+            isDemo: r.isDemo === true || r.isDemo === 1
+          }))
+        });
+      }
+
+      if (data.transactions && Array.isArray(data.transactions)) {
+        await tx.transaction.createMany({
+          data: data.transactions.map(t => ({
+            id: t.id,
+            date: t.date,
+            description: t.description,
+            amount: t.amount,
+            type: t.type,
+            accountId: t.accountId,
+            destinationAccountId: t.destinationAccountId !== undefined && t.destinationAccountId !== null ? t.destinationAccountId : null,
+            scope: t.scope,
+            category: t.category,
+            subcategory: t.subcategory,
+            isAutoMatched: t.isAutoMatched === true || t.isAutoMatched === 1,
+            ruleId: t.ruleId !== undefined && t.ruleId !== null ? t.ruleId : null,
+            isVerified: t.isVerified === true || t.isVerified === 1,
+            isDemo: t.isDemo === true || t.isDemo === 1,
+            notes: t.notes || null,
+            customer: t.customer || null,
+            invoiceId: t.invoiceId || null
+          }))
+        });
+      }
+    });
+  },
+
+  copyDemoToReal: async () => {
+    await prisma.$transaction(async (tx) => {
       // 1. Get all demo accounts
-      const demoAccounts = db.prepare('SELECT * FROM accounts WHERE isDemo = 1').all() as any[];
+      const demoAccounts = await tx.account.findMany({ where: { isDemo: true } });
       const accountIdMap: Record<string, string> = {};
-      
-      const insertAcc = db.prepare(`
-        INSERT INTO accounts (id, name, type, scope, balance, "limit", iban, notes, isDemo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `);
-      
+
       for (const a of demoAccounts) {
         const realId = `real-${a.id}`;
         accountIdMap[a.id] = realId;
-        
-        const exists = db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(realId);
+
+        const exists = await tx.account.findUnique({ where: { id: realId } });
         if (!exists) {
-          insertAcc.run(
-            realId,
-            a.name,
-            a.type,
-            a.scope,
-            a.balance,
-            a.limit !== undefined && a.limit !== null ? a.limit : null,
-            a.iban || '',
-            a.notes || ''
-          );
+          await tx.account.create({
+            data: {
+              id: realId,
+              name: a.name,
+              type: a.type,
+              scope: a.scope,
+              balance: a.balance,
+              limit: a.limit !== undefined && a.limit !== null ? a.limit : null,
+              iban: a.iban || '',
+              notes: a.notes || '',
+              isDemo: false
+            }
+          });
         }
       }
 
-      // 2. Clear then copy rules
-      const demoRules = db.prepare('SELECT * FROM rules WHERE isDemo = 1').all() as any[];
-      const insertRule = db.prepare(`
-        INSERT INTO rules (id, name, keyword, scope, category, subcategory, isDemo)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-      `);
+      // 2. Copy rules
+      const demoRules = await tx.rule.findMany({ where: { isDemo: true } });
       for (const r of demoRules) {
         const realRuleId = `real-${r.id}`;
-        const exists = db.prepare('SELECT 1 FROM rules WHERE id = ?').get(realRuleId);
+        const exists = await tx.rule.findUnique({ where: { id: realRuleId } });
         if (!exists) {
-          insertRule.run(
-            realRuleId,
-            r.name,
-            r.keyword,
-            r.scope,
-            r.category,
-            r.subcategory
-          );
+          await tx.rule.create({
+            data: {
+              id: realRuleId,
+              name: r.name,
+              keyword: r.keyword,
+              scope: r.scope,
+              category: r.category,
+              subcategory: r.subcategory,
+              accountId: r.accountId ? (accountIdMap[r.accountId] || r.accountId) : null,
+              destinationAccountId: r.destinationAccountId ? (accountIdMap[r.destinationAccountId] || r.destinationAccountId) : null,
+              isDemo: false
+            }
+          });
         }
       }
 
       // 3. Copy transactions
-      const demoTxs = db.prepare('SELECT * FROM transactions WHERE isDemo = 1').all() as any[];
-      const insertTx = db.prepare(`
-        INSERT INTO transactions (id, date, description, amount, type, accountId, destinationAccountId, scope, category, subcategory, isAutoMatched, ruleId, isVerified, isDemo, notes, customer, invoiceId)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-      `);
-      
+      const demoTxs = await tx.transaction.findMany({ where: { isDemo: true } });
       for (const t of demoTxs) {
         const realTxId = `real-${t.id}`;
-        const exists = db.prepare('SELECT 1 FROM transactions WHERE id = ?').get(realTxId);
+        const exists = await tx.transaction.findUnique({ where: { id: realTxId } });
         if (!exists) {
           const mappedAccountId = accountIdMap[t.accountId] || t.accountId;
           const mappedDestAccountId = t.destinationAccountId ? (accountIdMap[t.destinationAccountId] || t.destinationAccountId) : null;
           const mappedRuleId = t.ruleId ? `real-${t.ruleId}` : null;
-          
-          insertTx.run(
-            realTxId,
-            t.date,
-            t.description,
-            t.amount,
-            t.type,
-            mappedAccountId,
-            mappedDestAccountId,
-            t.scope,
-            t.category,
-            t.subcategory,
-            t.isAutoMatched ? 1 : 0,
-            mappedRuleId,
-            t.isVerified ? 1 : 0,
-            t.notes || null,
-            t.customer || null,
-            t.invoiceId || null
-          );
+
+          await tx.transaction.create({
+            data: {
+              id: realTxId,
+              date: t.date,
+              description: t.description,
+              amount: t.amount,
+              type: t.type,
+              accountId: mappedAccountId,
+              destinationAccountId: mappedDestAccountId,
+              scope: t.scope,
+              category: t.category,
+              subcategory: t.subcategory,
+              isAutoMatched: t.isAutoMatched,
+              ruleId: mappedRuleId,
+              isVerified: t.isVerified,
+              isDemo: false,
+              notes: t.notes || null,
+              customer: t.customer || null,
+              invoiceId: t.invoiceId || null
+            }
+          });
         }
       }
     });
-    transaction();
   },
 
-  deleteDemoTransactions: () => {
-    const transaction = db.transaction(() => {
-      db.prepare('DELETE FROM transactions WHERE isDemo = 1').run();
-      db.prepare('UPDATE accounts SET balance = 0 WHERE isDemo = 1').run();
-      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('demo_transactions_deleted', 'true')").run();
+  deleteDemoTransactions: async () => {
+    await prisma.$transaction(async (tx) => {
+      await tx.transaction.deleteMany({ where: { isDemo: true } });
+      await tx.account.updateMany({
+        where: { isDemo: true },
+        data: { balance: 0 }
+      });
+      await tx.setting.upsert({
+        where: { key: 'demo_transactions_deleted' },
+        update: { value: 'true' },
+        create: { key: 'demo_transactions_deleted', value: 'true' }
+      });
     });
-    transaction();
   },
 
-  replaceDatabaseFile: (tempFilePath: string) => {
-    db.close();
-    fs.copyFileSync(tempFilePath, dbPath);
-    db = new Database(dbPath);
-    db.pragma('foreign_keys = ON');
-    console.log("Database file replaced and re-initialized successfully.");
+  replaceDatabaseFile: async (tempFilePath: string) => {
+    // @ts-ignore
+    const Database = (await import('better-sqlite3')).default;
+    const tempDb = new Database(tempFilePath);
+
+    try {
+      const settings = tempDb.prepare('SELECT * FROM settings').all() as any[];
+      const accounts = tempDb.prepare('SELECT * FROM accounts').all() as any[];
+      const transactions = tempDb.prepare('SELECT * FROM transactions').all() as any[];
+      const rules = tempDb.prepare('SELECT * FROM rules').all() as any[];
+
+      tempDb.close();
+
+      await prisma.$transaction(async (tx) => {
+        await tx.transaction.deleteMany();
+        await tx.account.deleteMany();
+        await tx.rule.deleteMany();
+        await tx.setting.deleteMany();
+
+        if (settings.length > 0) {
+          await tx.setting.createMany({ data: settings });
+        }
+
+        if (accounts.length > 0) {
+          await tx.account.createMany({
+            data: accounts.map(a => ({
+              id: a.id,
+              name: a.name,
+              type: a.type,
+              scope: a.scope,
+              balance: a.balance,
+              limit: a.limit !== undefined && a.limit !== null ? a.limit : null,
+              iban: a.iban || '',
+              notes: a.notes || '',
+              isDemo: a.isDemo === 1
+            }))
+          });
+        }
+
+        if (rules.length > 0) {
+          await tx.rule.createMany({
+            data: rules.map(r => ({
+              id: r.id,
+              name: r.name,
+              keyword: r.keyword,
+              scope: r.scope,
+              category: r.category,
+              subcategory: r.subcategory,
+              accountId: r.accountId || null,
+              destinationAccountId: r.destinationAccountId || null,
+              isDemo: r.isDemo === 1
+            }))
+          });
+        }
+
+        if (transactions.length > 0) {
+          await tx.transaction.createMany({
+            data: transactions.map(t => ({
+              id: t.id,
+              date: t.date,
+              description: t.description,
+              amount: t.amount,
+              type: t.type,
+              accountId: t.accountId,
+              destinationAccountId: t.destinationAccountId !== undefined && t.destinationAccountId !== null ? t.destinationAccountId : null,
+              scope: t.scope,
+              category: t.category,
+              subcategory: t.subcategory,
+              isAutoMatched: t.isAutoMatched === 1,
+              ruleId: t.ruleId !== undefined && t.ruleId !== null ? t.ruleId : null,
+              isVerified: t.isVerified === 1,
+              isDemo: t.isDemo === 1,
+              notes: t.notes || null,
+              customer: t.customer || null,
+              invoiceId: t.invoiceId || null
+            }))
+          });
+        }
+      });
+      console.log("Database SQLite backup successfully imported into remote MySQL database!");
+    } catch (err) {
+      try {
+        tempDb.close();
+      } catch (_) {}
+      throw err;
+    }
   }
 };

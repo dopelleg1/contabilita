@@ -15,8 +15,12 @@ import AdmZip from "adm-zip";
 
 dotenv.config();
 
-// Initialized SQLite database
-initDb();
+// Initialize MySQL database (async)
+initDb().then(() => {
+  console.log("Database initialized successfully!");
+}).catch(err => {
+  console.error("Database initialization failed:", err);
+});
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -503,24 +507,24 @@ Rispondi solamente con un oggetto JSON valido basato sul seguente schema.`;
 // --- SQLite Database REST API Routes ---
 
 // Fetch the complete state
-app.get("/api/db-state", (req, res) => {
+app.get("/api/db-state", async (req, res) => {
   try {
-    const accounts = dbOps.getAccounts();
-    const transactions = dbOps.getTransactions();
-    const rules = dbOps.getRules();
-    const taxpayerName = dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino";
-    const taxpayerCf = dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R";
-    const salaryDayOfMonth = Number(dbOps.getSetting("salary_day_of_month") || "23");
-    const cycleDurationDays = Number(dbOps.getSetting("cycle_duration_days") || "30");
+    const accounts = await dbOps.getAccounts();
+    const transactions = await dbOps.getTransactions();
+    const rules = await dbOps.getRules();
+    const taxpayerName = await dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino";
+    const taxpayerCf = await dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R";
+    const salaryDayOfMonth = Number(await dbOps.getSetting("salary_day_of_month") || "23");
+    const cycleDurationDays = Number(await dbOps.getSetting("cycle_duration_days") || "30");
     
-    let investmentsStr = dbOps.getSetting("investments_data");
+    let investmentsStr = await dbOps.getSetting("investments_data");
     if (!investmentsStr) {
       const defaultInvestments = [
         { id: "inv-1", name: "Strada Monti", description: "Fondo di investimento / Terreni Montani", type: "investment", buyValue: 15000, currentValue: 18200 },
         { id: "inv-2", name: "Fiat Tipo", description: "Automobile personale (Asset)", type: "asset", buyValue: 22000, currentValue: 14500 }
       ];
       investmentsStr = JSON.stringify(defaultInvestments);
-      dbOps.setSetting("investments_data", investmentsStr);
+      await dbOps.setSetting("investments_data", investmentsStr);
     }
     const investments = JSON.parse(investmentsStr);
     
@@ -541,18 +545,18 @@ app.get("/api/db-state", (req, res) => {
 });
 
 // Accounts API
-app.get("/api/accounts", (req, res) => {
+app.get("/api/accounts", async (req, res) => {
   try {
-    res.json(dbOps.getAccounts());
+    res.json(await dbOps.getAccounts());
   } catch (error) {
     res.status(550).json({ error: "Errore nel recupero dei conti." });
   }
 });
 
-app.post("/api/accounts", (req, res) => {
+app.post("/api/accounts", async (req, res) => {
   try {
     const account = req.body;
-    dbOps.addAccount(account);
+    await dbOps.addAccount(account);
     res.status(201).json({ success: true, account });
   } catch (error) {
     console.error("Error creating account:", error);
@@ -560,21 +564,21 @@ app.post("/api/accounts", (req, res) => {
   }
 });
 
-app.put("/api/accounts/:id", (req, res) => {
+app.put("/api/accounts/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const account = req.body;
-    dbOps.updateAccount(id, account);
+    await dbOps.updateAccount(id, account);
     res.json({ success: true, account });
   } catch (error) {
     res.status(500).json({ error: "Errore nell'aggiornamento del conto." });
   }
 });
 
-app.delete("/api/accounts/:id", (req, res) => {
+app.delete("/api/accounts/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    dbOps.deleteAccount(id);
+    await dbOps.deleteAccount(id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Errore nella rimozione del conto." });
@@ -582,18 +586,18 @@ app.delete("/api/accounts/:id", (req, res) => {
 });
 
 // Transactions API
-app.get("/api/transactions", (req, res) => {
+app.get("/api/transactions", async (req, res) => {
   try {
-    res.json(dbOps.getTransactions());
+    res.json(await dbOps.getTransactions());
   } catch (error) {
     res.status(500).json({ error: "Errore nel recupero dei movimenti." });
   }
 });
 
-app.post("/api/transactions", (req, res) => {
+app.post("/api/transactions", async (req, res) => {
   try {
     const tx = req.body;
-    dbOps.addTransaction(tx);
+    await dbOps.addTransaction(tx);
     res.status(201).json({ success: true, transaction: tx });
   } catch (error) {
     console.error("Error creating transaction:", error);
@@ -601,21 +605,21 @@ app.post("/api/transactions", (req, res) => {
   }
 });
 
-app.put("/api/transactions/:id", (req, res) => {
+app.put("/api/transactions/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const tx = req.body;
-    dbOps.updateTransaction(id, tx);
+    await dbOps.updateTransaction(id, tx);
     res.json({ success: true, transaction: tx });
   } catch (error) {
     res.status(500).json({ error: "Errore nell'aggiornamento del movimento." });
   }
 });
 
-app.delete("/api/transactions/:id", (req, res) => {
+app.delete("/api/transactions/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    dbOps.deleteTransaction(id);
+    await dbOps.deleteTransaction(id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Errore nell'eliminazione del movimento." });
@@ -623,28 +627,28 @@ app.delete("/api/transactions/:id", (req, res) => {
 });
 
 // Rules API
-app.get("/api/rules", (req, res) => {
+app.get("/api/rules", async (req, res) => {
   try {
-    res.json(dbOps.getRules());
+    res.json(await dbOps.getRules());
   } catch (error) {
     res.status(500).json({ error: "Errore nel recupero delle regole." });
   }
 });
 
-app.post("/api/rules", (req, res) => {
+app.post("/api/rules", async (req, res) => {
   try {
     const rule = req.body;
-    dbOps.addRule(rule);
+    await dbOps.addRule(rule);
     res.status(201).json({ success: true, rule });
   } catch (error) {
     res.status(500).json({ error: "Errore nel salvataggio della regola." });
   }
 });
 
-app.delete("/api/rules/:id", (req, res) => {
+app.delete("/api/rules/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    dbOps.deleteRule(id);
+    await dbOps.deleteRule(id);
     res.json({ success: true });
   } catch (error) {
     res.status(550).json({ error: "Errore nella rimozione della regola." });
@@ -652,23 +656,23 @@ app.delete("/api/rules/:id", (req, res) => {
 });
 
 // Settings API
-app.post("/api/settings", (req, res) => {
+app.post("/api/settings", async (req, res) => {
   try {
     const { taxpayerName, taxpayerCf, salaryDayOfMonth, cycleDurationDays, investments } = req.body;
     if (taxpayerName !== undefined) {
-      dbOps.setSetting("taxpayer_name", taxpayerName);
+      await dbOps.setSetting("taxpayer_name", taxpayerName);
     }
     if (taxpayerCf !== undefined) {
-      dbOps.setSetting("taxpayer_cf", taxpayerCf);
+      await dbOps.setSetting("taxpayer_cf", taxpayerCf);
     }
     if (salaryDayOfMonth !== undefined) {
-      dbOps.setSetting("salary_day_of_month", String(salaryDayOfMonth));
+      await dbOps.setSetting("salary_day_of_month", String(salaryDayOfMonth));
     }
     if (cycleDurationDays !== undefined) {
-      dbOps.setSetting("cycle_duration_days", String(cycleDurationDays));
+      await dbOps.setSetting("cycle_duration_days", String(cycleDurationDays));
     }
     if (investments !== undefined) {
-      dbOps.setSetting("investments_data", JSON.stringify(investments));
+      await dbOps.setSetting("investments_data", JSON.stringify(investments));
     }
     res.json({ success: true });
   } catch (error) {
@@ -677,13 +681,13 @@ app.post("/api/settings", (req, res) => {
 });
 
 // Full reset / Clear transactions and zero account balances
-app.post("/api/transactions/clear-all", (req, res) => {
+app.post("/api/transactions/clear-all", async (req, res) => {
   try {
-    dbOps.clearAllTransactions();
+    await dbOps.clearAllTransactions();
     res.json({
       success: true,
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions()
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions()
     });
   } catch (error) {
     console.error("Error clearing transactions:", error);
@@ -694,12 +698,12 @@ app.post("/api/transactions/clear-all", (req, res) => {
 // Backup & Restore Database API Routes
 
 // JSON Export of all tables
-app.get("/api/backup/export", (req, res) => {
+app.get("/api/backup/export", async (req, res) => {
   try {
-    const settings = dbOps.getAllSettings();
-    const accounts = dbOps.getAccounts();
-    const transactions = dbOps.getTransactions();
-    const rules = dbOps.getRules();
+    const settings = await dbOps.getAllSettings();
+    const accounts = await dbOps.getAccounts();
+    const transactions = await dbOps.getTransactions();
+    const rules = await dbOps.getRules();
 
     res.json({
       version: "1.0.0",
@@ -716,14 +720,14 @@ app.get("/api/backup/export", (req, res) => {
 });
 
 // JSON Import (Overwrite entire DB)
-app.post("/api/backup/import", (req, res) => {
+app.post("/api/backup/import", async (req, res) => {
   try {
     const data = req.body;
     if (!data || (!data.accounts && !data.transactions && !data.rules && !data.settings)) {
       return res.status(400).json({ error: "Dati di backup non validi o vuoti." });
     }
 
-    dbOps.importAllData({
+    await dbOps.importAllData({
       accounts: data.accounts || [],
       transactions: data.transactions || [],
       rules: data.rules || [],
@@ -733,11 +737,11 @@ app.post("/api/backup/import", (req, res) => {
     res.json({
       success: true,
       message: "Database ripristinato con successo dal file di backup.",
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions(),
-      rules: dbOps.getRules(),
-      taxpayerName: dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
-      taxpayerCf: dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions(),
+      rules: await dbOps.getRules(),
+      taxpayerName: await dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
+      taxpayerCf: await dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
     });
   } catch (error: any) {
     console.error("Error importing backup JSON:", error);
@@ -746,7 +750,7 @@ app.post("/api/backup/import", (req, res) => {
 });
 
 // SQLite raw file download
-app.get("/api/backup/sqlite", (req, res) => {
+app.get("/api/backup/sqlite", async (req, res) => {
   try {
     const dbFilePath = path.resolve(process.cwd(), 'database.db');
     res.download(dbFilePath, 'database.db', (err) => {
@@ -761,7 +765,7 @@ app.get("/api/backup/sqlite", (req, res) => {
 });
 
 // Full Master Backup ZIP Export
-app.get("/api/backup/export/full-zip", (req, res) => {
+app.get("/api/backup/export/full-zip", async (req, res) => {
   try {
     const rootDir = process.cwd();
     const filesZip = new AdmZip();
@@ -838,7 +842,7 @@ Carica questo intero file .zip direttamente nel pannello di autoinstallazione 'i
 });
 
 // SQLite raw file upload (restore database.db directly)
-app.post("/api/backup/sqlite/upload", (req, res) => {
+app.post("/api/backup/sqlite/upload", async (req, res) => {
   try {
     const { fileBase64 } = req.body;
     if (!fileBase64) {
@@ -857,7 +861,7 @@ app.post("/api/backup/sqlite/upload", (req, res) => {
     fs.writeFileSync(tempPath, buffer);
 
     // Call database manager to close active connection, overwrite db and re-open it
-    (dbOps as any).replaceDatabaseFile(tempPath);
+    await (dbOps as any).replaceDatabaseFile(tempPath);
 
     // Remove temp file
     try {
@@ -867,11 +871,11 @@ app.post("/api/backup/sqlite/upload", (req, res) => {
     res.json({
       success: true,
       message: "Database SQLite binario ripristinato con successo!",
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions(),
-      rules: dbOps.getRules(),
-      taxpayerName: dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
-      taxpayerCf: dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions(),
+      rules: await dbOps.getRules(),
+      taxpayerName: await dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
+      taxpayerCf: await dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
     });
   } catch (error: any) {
     console.error("Error restoring SQLite database:", error);
@@ -882,11 +886,11 @@ app.post("/api/backup/sqlite/upload", (req, res) => {
 // Enable Banking Open Banking PSD2 API Routes
 
 // Retrieve currently persisted Open Banking configuration metadata (without private key secret)
-app.get("/api/bank/config", (req, res) => {
+app.get("/api/bank/config", async (req, res) => {
   try {
-    const clientId = dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID || "";
-    const keyId = dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID || "";
-    const hasPrivateKey = !!(dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY);
+    const clientId = await dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID || "";
+    const keyId = await dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID || "";
+    const hasPrivateKey = !!(await dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY);
     res.json({
       isConfigured: !!clientId && hasPrivateKey,
       clientId,
@@ -898,17 +902,17 @@ app.get("/api/bank/config", (req, res) => {
 });
 
 // Update Open Banking API Credentials
-app.post("/api/bank/config", (req, res) => {
+app.post("/api/bank/config", async (req, res) => {
   try {
     const { clientId, keyId, privateKey } = req.body;
     if (clientId !== undefined) {
-      dbOps.setSetting("enable_banking_client_id", clientId.trim());
+      await dbOps.setSetting("enable_banking_client_id", clientId.trim());
     }
     if (keyId !== undefined) {
-      dbOps.setSetting("enable_banking_key_id", keyId.trim());
+      await dbOps.setSetting("enable_banking_key_id", keyId.trim());
     }
     if (privateKey !== undefined) {
-      dbOps.setSetting("enable_banking_private_key", privateKey.trim());
+      await dbOps.setSetting("enable_banking_private_key", privateKey.trim());
     }
     res.json({ success: true });
   } catch (err: any) {
@@ -924,9 +928,9 @@ app.post("/api/bank/sessions", async (req, res) => {
       return res.status(400).json({ error: "Identificativo della banca (ASPSP) mancante." });
     }
 
-    const clientId = dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
-    const keyId = dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
-    const privateKey = dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
+    const clientId = await dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
+    const keyId = await dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
+    const privateKey = await dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
 
     if (!clientId || !privateKey) {
       return res.status(200).json({
@@ -982,9 +986,9 @@ app.post("/api/bank/session-accounts", async (req, res) => {
       return res.status(400).json({ error: "Codice di autorizzazione Open Banking nullo o non valido." });
     }
 
-    const clientId = dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
-    const keyId = dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
-    const privateKey = dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
+    const clientId = await dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
+    const keyId = await dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
+    const privateKey = await dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
 
     if (!clientId || !privateKey) {
       return res.status(400).json({ error: "Configurazione delle API e firme crittografiche non completata." });
@@ -1011,7 +1015,7 @@ app.post("/api/bank/session-accounts", async (req, res) => {
     const bankAccounts = await EnableBankingService.getAccounts(config, sessionId);
 
     // 3. Match against existing SQL accounts
-    const existingAccounts = dbOps.getAccounts();
+    const existingAccounts = await dbOps.getAccounts();
 
     const retrieved = bankAccounts.map((bAcc: any) => {
       // Find matches in local database
@@ -1082,9 +1086,9 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
       return res.status(400).json({ error: "Sessione PSD2 non valida o scaduta." });
     }
 
-    const clientId = dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
-    const keyId = dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
-    const privateKey = dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
+    const clientId = await dbOps.getSetting("enable_banking_client_id") || process.env.ENABLE_BANKING_CLIENT_ID;
+    const keyId = await dbOps.getSetting("enable_banking_key_id") || process.env.ENABLE_BANKING_KEY_ID;
+    const privateKey = await dbOps.getSetting("enable_banking_private_key") || process.env.ENABLE_BANKING_PRIVATE_KEY;
 
     if (!clientId || !privateKey) {
       return res.status(400).json({ error: "Configurazione delle API non trovata." });
@@ -1105,7 +1109,7 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
       let accountToUpdate: any = null;
       let isNew = true;
 
-      const existingAccounts = dbOps.getAccounts();
+      const existingAccounts = await dbOps.getAccounts();
 
       if (targetAccountIdRaw && targetAccountIdRaw !== "new") {
         // Associate with existing account
@@ -1140,9 +1144,9 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
       };
 
       if (!isNew) {
-        dbOps.updateAccount(accountId, accountObj);
+        await dbOps.updateAccount(accountId, accountObj);
       } else {
-        dbOps.addAccount(accountObj);
+        await dbOps.addAccount(accountObj);
       }
       accountsImported++;
 
@@ -1152,7 +1156,7 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
         for (const bTx of bankTransactions) {
           // Keep unique transaction ID based on banking tx.id so we don't import duplicates to the mapped account
           const txId = `bank-tx-${bTx.id}-${accountId}`; 
-          const existingTransactions = dbOps.getTransactions();
+          const existingTransactions = await dbOps.getTransactions();
           const txExists = existingTransactions.find(t => t.id === txId || t.id === `bank-tx-${bTx.id}`);
 
           if (!txExists) {
@@ -1214,7 +1218,7 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
               invoiceId: null
             };
 
-            dbOps.addTransaction(txObj);
+            await dbOps.addTransaction(txObj);
             transactionsImported++;
           }
         }
@@ -1228,8 +1232,8 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
       bankName: bankDisplayName,
       accountsImported,
       transactionsImported,
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions()
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions()
     });
 
   } catch (error: any) {
@@ -1239,18 +1243,18 @@ app.post("/api/bank/confirm-sync", async (req, res) => {
 });
 
 // Full reset / Seed database
-app.post("/api/reset", (req, res) => {
+app.post("/api/reset", async (req, res) => {
   try {
-    dbOps.resetAllDb();
-    initDb(); // Restores original seeds
+    await dbOps.resetAllDb();
+    await initDb(); // Restores original seeds
     
     // Send back the seeded lists
     res.json({
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions(),
-      rules: dbOps.getRules(),
-      taxpayerName: dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
-      taxpayerCf: dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions(),
+      rules: await dbOps.getRules(),
+      taxpayerName: await dbOps.getSetting("taxpayer_name") || "Domenico Pellegrino",
+      taxpayerCf: await dbOps.getSetting("taxpayer_cf") || "PLLDNC60B14A494R"
     });
   } catch (error) {
     console.error("Error resetting DB:", error);
@@ -1259,14 +1263,14 @@ app.post("/api/reset", (req, res) => {
 });
 
 // Copy all Demo data to Real tables
-app.post("/api/copy-demo-to-real", (req, res) => {
+app.post("/api/copy-demo-to-real", async (req, res) => {
   try {
-    (dbOps as any).copyDemoToReal();
+    await (dbOps as any).copyDemoToReal();
     res.json({
       success: true,
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions(),
-      rules: dbOps.getRules()
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions(),
+      rules: await dbOps.getRules()
     });
   } catch (error) {
     console.error("Error copying demo to real:", error);
@@ -1275,13 +1279,13 @@ app.post("/api/copy-demo-to-real", (req, res) => {
 });
 
 // Delete all Demo transactions
-app.post("/api/delete-demo-transactions", (req, res) => {
+app.post("/api/delete-demo-transactions", async (req, res) => {
   try {
-    (dbOps as any).deleteDemoTransactions();
+    await (dbOps as any).deleteDemoTransactions();
     res.json({
       success: true,
-      accounts: dbOps.getAccounts(),
-      transactions: dbOps.getTransactions()
+      accounts: await dbOps.getAccounts(),
+      transactions: await dbOps.getTransactions()
     });
   } catch (error) {
     console.error("Error deleting demo transactions:", error);

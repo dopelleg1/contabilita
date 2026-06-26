@@ -1212,7 +1212,10 @@ export default function App() {
           <div className="p-1.5 bg-indigo-600 rounded-lg text-white">
             <Coins className="w-5 h-5" />
           </div>
-          <span className="font-bold text-sm tracking-tight text-slate-800">ContoSmart Budget P.IVA</span>
+          <div className="flex flex-col">
+            <span className="font-bold text-sm tracking-tight text-slate-800 leading-tight">ContoSmart Budget P.IVA</span>
+            <span className="text-[10px] text-slate-500 font-medium mt-0.5">Release 1.0.0</span>
+          </div>
         </div>
         <button 
           id="btn-mobile-menu"
@@ -1239,6 +1242,7 @@ export default function App() {
               <div className="flex flex-col">
                 <span className="font-bold text-xs tracking-wider uppercase text-white leading-tight">ContoSmart</span>
                 <span className="text-[10px] text-indigo-400 font-semibold tracking-wider">Gestione Budget & P.IVA</span>
+                <span className="text-[9px] text-slate-500 font-medium tracking-wide mt-1">Release 1.0.0</span>
               </div>
             </div>
 

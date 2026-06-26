@@ -98,7 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action']) && $_POST['action'] === 'save_env') {
         $gemini_key = trim($_POST['gemini_key']);
         $port = trim($_POST['port']) ?: '3000';
-        $envContent = "PORT=" . $port . "\n";
+        $db_url = trim($_POST['db_url']);
+        $envContent = "DATABASE_URL=\"" . $db_url . "\"\n";
+        $envContent .= "PORT=" . $port . "\n";
         $envContent .= "NODE_ENV=production\n";
         $envContent .= "GEMINI_API_KEY=" . $gemini_key . "\n";
         
@@ -431,6 +433,7 @@ if ($action === 'npm_install') {
 // Lettura chiave Gemini attuale se presente
 $current_gemini = '';
 $current_port = '3000';
+$current_db_url = '';
 if (file_exists($envPath)) {
     $envLines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
     foreach ($envLines as $line) {
@@ -439,6 +442,10 @@ if (file_exists($envPath)) {
         }
         if (strpos(trim($line), 'PORT=') === 0) {
             $current_port = substr(trim($line), strlen('PORT='));
+        }
+        if (strpos(trim($line), 'DATABASE_URL=') === 0) {
+            $val = substr(trim($line), strlen('DATABASE_URL='));
+            $current_db_url = trim($val, '"\'');
         }
     }
 }
@@ -595,6 +602,14 @@ if (file_exists($envPath)) {
                             <span class="text-[8px] text-amber-600 font-extrabold px-1.5 py-0.5 rounded bg-amber-50 uppercase tracking-widest">Sicurezza</span>
                         </div>
                         <input type="password" name="gemini_key" value="<?php echo htmlspecialchars($current_gemini); ?>" placeholder="AIzaSy_InserisciLaTuaChiave..." class="w-full text-xs font-mono border border-slate-200 text-slate-800 rounded px-2.5 py-2.5 focus:border-indigo-500 outline-none" />
+                    </div>
+
+                    <div class="space-y-1">
+                        <div class="flex justify-between items-center">
+                            <label class="block text-[10px] font-black uppercase text-slate-500 tracking-wider">Stringa di connessione MySQL (DATABASE_URL)</label>
+                            <span class="text-[8px] text-indigo-600 font-extrabold px-1.5 py-0.5 rounded bg-indigo-50 uppercase tracking-widest">Database</span>
+                        </div>
+                        <input type="text" name="db_url" value="<?php echo htmlspecialchars($current_db_url); ?>" placeholder="mysql://u903659692_walle:Password@92.113.22.5:3306/u903659692_walle" class="w-full text-xs font-mono border border-slate-200 text-slate-800 rounded px-2.5 py-2.5 focus:border-indigo-500 outline-none" required />
                     </div>
 
                     <p class="text-[10px] text-slate-400 leading-relaxed font-semibold">

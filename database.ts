@@ -12,6 +12,24 @@ const dbPath = path.resolve(process.cwd(), 'database.db');
 
 export const prisma = new PrismaClient();
 
+function advanceDate(dateStr: string, frequency: string): string {
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return dateStr;
+
+  if (frequency === 'weekly') {
+    date.setDate(date.getDate() + 7);
+  } else if (frequency === 'monthly') {
+    date.setMonth(date.getMonth() + 1);
+  } else if (frequency === 'bi_monthly') {
+    date.setMonth(date.getMonth() + 2);
+  } else if (frequency === 'quarterly') {
+    date.setMonth(date.getMonth() + 3);
+  } else if (frequency === 'annual') {
+    date.setFullYear(date.getFullYear() + 1);
+  }
+  return date.toISOString().split('T')[0];
+}
+
 // Convert SQLite integers (0/1) to real booleans (false/true)
 // Not strictly needed for Prisma queries as they map to real booleans,
 // but preserved as a safe utility to maintain absolute compatibility with other service layers.
@@ -150,6 +168,34 @@ export const dbOps = {
     return rows.map(mapRowBooleans);
   },
   addTransaction: async (tx: any) => {
+    let isVerified = tx.isVerified === true || tx.isVerified === 1;
+
+    try {
+      // Check recurring transactions to advance nextDueDate
+      const recurrences = await prisma.recurringTransaction.findMany({
+        where: { isActive: true, accountId: tx.accountId, isDemo: tx.isDemo === true || tx.isDemo === 1 }
+      });
+      const txDate = new Date(tx.date);
+      for (const r of recurrences) {
+        if (tx.description.toUpperCase().includes(r.keyword.toUpperCase())) {
+          const dueDate = new Date(r.nextDueDate);
+          const diffTime = Math.abs(txDate.getTime() - dueDate.getTime());
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          if (diffDays <= 7) {
+            const newDueDate = advanceDate(r.nextDueDate, r.frequency);
+            await prisma.recurringTransaction.update({
+              where: { id: r.id },
+              data: { nextDueDate: newDueDate }
+            });
+            isVerified = true; // Auto-verify the matching transaction!
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error auto-advancing recurrence:", err);
+    }
+
     await prisma.transaction.create({
       data: {
         id: tx.id,
@@ -164,7 +210,7 @@ export const dbOps = {
         subcategory: tx.subcategory,
         isAutoMatched: tx.isAutoMatched === true || tx.isAutoMatched === 1,
         ruleId: tx.ruleId !== undefined && tx.ruleId !== null ? tx.ruleId : null,
-        isVerified: tx.isVerified === true || tx.isVerified === 1,
+        isVerified: isVerified,
         isDemo: tx.isDemo === true || tx.isDemo === 1,
         linkedTransactionId: tx.linkedTransactionId !== undefined && tx.linkedTransactionId !== null ? tx.linkedTransactionId : null,
         notes: tx.notes !== undefined && tx.notes !== null ? tx.notes : null,
@@ -256,6 +302,7 @@ export const dbOps = {
 
   resetAllDb: async () => {
     await prisma.transaction.deleteMany();
+    await prisma.recurringTransaction.deleteMany();
     await prisma.account.deleteMany();
     await prisma.rule.deleteMany();
     await prisma.setting.deleteMany();
@@ -265,9 +312,10 @@ export const dbOps = {
     return await prisma.setting.findMany();
   },
 
-  importAllData: async (data: { accounts: any[]; transactions: any[]; rules: any[]; settings?: { key: string; value: string }[] }) => {
+  importAllData: async (data: { accounts: any[]; transactions: any[]; rules: any[]; settings?: { key: string; value: string }[]; recurringTransactions?: any[] }) => {
     await prisma.$transaction(async (tx) => {
       await tx.transaction.deleteMany();
+      await tx.recurringTransaction.deleteMany();
       await tx.account.deleteMany();
       await tx.rule.deleteMany();
       await tx.setting.deleteMany();
@@ -328,6 +376,26 @@ export const dbOps = {
             notes: t.notes || null,
             customer: t.customer || null,
             invoiceId: t.invoiceId || null
+          }))
+        });
+      }
+
+      if (data.recurringTransactions && Array.isArray(data.recurringTransactions)) {
+        await tx.recurringTransaction.createMany({
+          data: data.recurringTransactions.map(rt => ({
+            id: rt.id,
+            name: rt.name,
+            keyword: rt.keyword,
+            amount: rt.amount,
+            frequency: rt.frequency,
+            scope: rt.scope,
+            category: rt.category,
+            subcategory: rt.subcategory,
+            accountId: rt.accountId,
+            destinationAccountId: rt.destinationAccountId || null,
+            nextDueDate: rt.nextDueDate,
+            isActive: rt.isActive === true || rt.isActive === 1,
+            isDemo: rt.isDemo === true || rt.isDemo === 1
           }))
         });
       }
@@ -417,12 +485,41 @@ export const dbOps = {
           });
         }
       }
+
+      // 4. Copy recurring transactions
+      const demoRecs = await tx.recurringTransaction.findMany({ where: { isDemo: true } });
+      for (const r of demoRecs) {
+        const realRecId = `real-${r.id}`;
+        const exists = await tx.recurringTransaction.findUnique({ where: { id: realRecId } });
+        if (!exists) {
+          const mappedAccountId = accountIdMap[r.accountId] || r.accountId;
+          const mappedDestAccountId = r.destinationAccountId ? (accountIdMap[r.destinationAccountId] || r.destinationAccountId) : null;
+          await tx.recurringTransaction.create({
+            data: {
+              id: realRecId,
+              name: r.name,
+              keyword: r.keyword,
+              amount: r.amount,
+              frequency: r.frequency,
+              scope: r.scope,
+              category: r.category,
+              subcategory: r.subcategory,
+              accountId: mappedAccountId,
+              destinationAccountId: mappedDestAccountId,
+              nextDueDate: r.nextDueDate,
+              isActive: r.isActive,
+              isDemo: false
+            }
+          });
+        }
+      }
     });
   },
 
   deleteDemoTransactions: async () => {
     await prisma.$transaction(async (tx) => {
       await tx.transaction.deleteMany({ where: { isDemo: true } });
+      await tx.recurringTransaction.deleteMany({ where: { isDemo: true } });
       await tx.account.updateMany({
         where: { isDemo: true },
         data: { balance: 0 }
@@ -446,10 +543,17 @@ export const dbOps = {
       const transactions = tempDb.prepare('SELECT * FROM transactions').all() as any[];
       const rules = tempDb.prepare('SELECT * FROM rules').all() as any[];
 
+      let recurringTransactions: any[] = [];
+      const hasRecTable = tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='recurring_transactions'").get();
+      if (hasRecTable) {
+        recurringTransactions = tempDb.prepare('SELECT * FROM recurring_transactions').all() as any[];
+      }
+
       tempDb.close();
 
       await prisma.$transaction(async (tx) => {
         await tx.transaction.deleteMany();
+        await tx.recurringTransaction.deleteMany();
         await tx.account.deleteMany();
         await tx.rule.deleteMany();
         await tx.setting.deleteMany();
@@ -513,6 +617,26 @@ export const dbOps = {
             }))
           });
         }
+
+        if (recurringTransactions.length > 0) {
+          await tx.recurringTransaction.createMany({
+            data: recurringTransactions.map(rt => ({
+              id: rt.id,
+              name: rt.name,
+              keyword: rt.keyword,
+              amount: rt.amount,
+              frequency: rt.frequency,
+              scope: rt.scope,
+              category: rt.category,
+              subcategory: rt.subcategory,
+              accountId: rt.accountId,
+              destinationAccountId: rt.destinationAccountId || null,
+              nextDueDate: rt.nextDueDate,
+              isActive: rt.isActive === 1,
+              isDemo: rt.isDemo === 1
+            }))
+          });
+        }
       });
       console.log("Database SQLite backup successfully imported into remote MySQL database!");
     } catch (err) {
@@ -521,5 +645,56 @@ export const dbOps = {
       } catch (_) {}
       throw err;
     }
+  },
+
+  // Recurring Transactions CRUD
+  getRecurringTransactions: async () => {
+    const rows = await prisma.recurringTransaction.findMany();
+    return rows.map(r => ({
+      ...r,
+      isActive: r.isActive === true,
+      isDemo: r.isDemo === true
+    }));
+  },
+  addRecurringTransaction: async (rt: any) => {
+    await prisma.recurringTransaction.create({
+      data: {
+        id: rt.id,
+        name: rt.name,
+        keyword: rt.keyword,
+        amount: rt.amount,
+        frequency: rt.frequency,
+        scope: rt.scope,
+        category: rt.category,
+        subcategory: rt.subcategory,
+        accountId: rt.accountId,
+        destinationAccountId: rt.destinationAccountId || null,
+        nextDueDate: rt.nextDueDate,
+        isActive: rt.isActive === true || rt.isActive === 1,
+        isDemo: rt.isDemo === true || rt.isDemo === 1
+      }
+    });
+  },
+  updateRecurringTransaction: async (id: string, rt: any) => {
+    await prisma.recurringTransaction.update({
+      where: { id },
+      data: {
+        name: rt.name,
+        keyword: rt.keyword,
+        amount: rt.amount,
+        frequency: rt.frequency,
+        scope: rt.scope,
+        category: rt.category,
+        subcategory: rt.subcategory,
+        accountId: rt.accountId,
+        destinationAccountId: rt.destinationAccountId || null,
+        nextDueDate: rt.nextDueDate,
+        isActive: rt.isActive === true || rt.isActive === 1,
+        isDemo: rt.isDemo === true || rt.isDemo === 1
+      }
+    });
+  },
+  deleteRecurringTransaction: async (id: string) => {
+    await prisma.recurringTransaction.delete({ where: { id } });
   }
 };

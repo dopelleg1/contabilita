@@ -26,6 +26,7 @@ model Account {
   isDemo  Boolean @default(false)
 
   transactions Transaction[]
+  recurringTransactions RecurringTransaction[]
 
   @@map("accounts")
 }
@@ -68,4 +69,25 @@ model Rule {
   isDemo               Boolean @default(false)
 
   @@map("rules")
+}
+
+model RecurringTransaction {
+  id                   String   @id @db.VarChar(255)
+  name                 String   @db.VarChar(255)
+  keyword              String   @db.VarChar(255)
+  amount               Float    @db.Double
+  frequency            String   @db.VarChar(255)
+  scope                String   @db.VarChar(255)
+  category             String   @db.VarChar(255)
+  subcategory          String   @db.VarChar(255)
+  accountId            String   @db.VarChar(255)
+  destinationAccountId String?  @db.VarChar(255)
+  nextDueDate          String   @db.VarChar(255)
+  isActive             Boolean  @default(true)
+  isDemo               Boolean  @default(false)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@map("recurring_transactions")
+  @@index([accountId])
 }

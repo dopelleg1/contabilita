@@ -18,6 +18,7 @@ import TransactionsTab from './components/TransactionsTab';
 import RulesTab from './components/RulesTab';
 import ImportExportTab from './components/ImportExportTab';
 import AiAdvisorTab from './components/AiAdvisorTab';
+import ForecastsTab from './components/ForecastsTab';
 
 import { 
   LayoutDashboard, 
@@ -41,7 +42,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'accounts' | 'transactions' | 'rules' | 'import-export' | 'ai-advisor'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'accounts' | 'transactions' | 'rules' | 'import-export' | 'ai-advisor' | 'forecasts'>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [taxpayerName, setTaxpayerName] = useState<string>('Domenico Pellegrino');
@@ -1271,6 +1272,17 @@ export default function App() {
               </button>
 
               <button 
+                id="nav-forecasts"
+                onClick={() => { setActiveTab('forecasts'); setMobileMenuOpen(false); }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs font-semibold rounded-lg transition-all ${
+                  activeTab === 'forecasts' ? 'bg-indigo-600 text-white shadow-sm font-bold border-l-4 border-indigo-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <Calendar className="w-4 h-4 text-violet-400" />
+                Scadenze & Previsioni
+              </button>
+
+              <button 
                 id="nav-accounts"
                 onClick={() => { setActiveTab('accounts'); setMobileMenuOpen(false); }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 text-xs font-semibold rounded-lg transition-all ${
@@ -1536,6 +1548,13 @@ export default function App() {
               accounts={filteredAccounts}
               transactions={filteredTransactions}
               taxpayerName={taxpayerName}
+            />
+          )}
+
+          {activeTab === 'forecasts' && (
+            <ForecastsTab 
+              accounts={filteredAccounts}
+              isDemoMode={isDemoMode}
             />
           )}
 

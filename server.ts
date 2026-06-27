@@ -655,6 +655,276 @@ app.delete("/api/rules/:id", async (req, res) => {
   }
 });
 
+// Recurring Transactions API
+app.get("/api/recurrences", async (req, res) => {
+  try {
+    res.json(await (dbOps as any).getRecurringTransactions());
+  } catch (error) {
+    res.status(500).json({ error: "Errore nel recupero delle scadenze ricorrenti." });
+  }
+});
+
+app.post("/api/recurrences", async (req, res) => {
+  try {
+    const rt = req.body;
+    await (dbOps as any).addRecurringTransaction(rt);
+    res.status(201).json({ success: true, recurrence: rt });
+  } catch (error) {
+    res.status(500).json({ error: "Errore nel salvataggio della scadenza ricorrente." });
+  }
+});
+
+app.put("/api/recurrences/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rt = req.body;
+    await (dbOps as any).updateRecurringTransaction(id, rt);
+    res.json({ success: true, recurrence: rt });
+  } catch (error) {
+    res.status(500).json({ error: "Errore nell'aggiornamento della scadenza ricorrente." });
+  }
+});
+
+app.delete("/api/recurrences/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await (dbOps as any).deleteRecurringTransaction(id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Errore nella rimozione della scadenza ricorrente." });
+  }
+});
+
+// AI Recurring Transaction Detection Endpoint
+app.post("/api/recurrences/analyze", async (req, res) => {
+  try {
+    const { isDemoMode } = req.body;
+    const aiClient = getGeminiClient();
+    
+    // Retrieve transactions from database
+    const allTxs = await dbOps.getTransactions();
+    const filteredTxs = allTxs.filter(t => isDemoMode ? t.isDemo === true : !t.isDemo);
+
+    if (filteredTxs.length === 0) {
+      return res.json({ suggestedRecurrences: [] });
+    }
+
+    // Limit transactions to send to Gemini to avoid exceeding token limit (last 150 transactions)
+    const txsForAI = filteredTxs.slice(0, 150).map(t => ({
+      date: t.date,
+      description: t.description,
+      amount: t.amount,
+      scope: t.scope,
+      category: t.category,
+      subcategory: t.subcategory
+    }));
+
+    if (!aiClient) {
+      // Fallback: local heuristic analyzer (returning empty or basics)
+      return res.json({ suggestedRecurrences: [] });
+    }
+
+    const prompt = `Sei l'analizzatore finanziario di ContoSmart.
+Analizza la lista di transazioni bancarie fornita (in formato JSON) per identificare operazioni ricorrenti o ripetute nel tempo (es. affitto mensile, bollette dell'energia elettrica/gas bimestrali, stipendi mensili, abbonamenti Netflix/Amazon Prime annuali o mensili).
+
+Per ciascun gruppo o serie di transazioni simili e ripetitive identificate nello storico, determina:
+1. Un nome descrittivo della ricorrenza (es. "Affitto Studio", "Stipendio", "Bolletta Enel").
+2. La parola chiave (keyword) ideale contenuta nella descrizione bancaria per intercettare il movimento in futuro (es. "NETFLIX", "LOCAZIONE", "ENEL ENERGIA").
+3. L'importo stimato (se l'importo è variabile, calcola la media).
+4. La frequenza (scegli strettamente uno tra: "weekly", "monthly", "bi_monthly", "quarterly", "annual").
+5. L'ambito (personal o professional).
+6. La categoria di appartenenza e la sottocategoria.
+7. La data della prossima scadenza prevista (nextDueDate) nel formato YYYY-MM-DD. Calcola questa data proiettando l'intervallo a partire dall'ultimo movimento registrato nello storico. Tieni presente che la data corrente (oggi) è ${new Date().toISOString().split('T')[0]}.
+8. Il livello di certezza (scegli tra "certain" per addebiti con lo stesso importo esatto a intervalli precisi, e "possible" per addebiti regolari ma ad importo o data variabile come le bollette).
+
+Ecco la lista di transazioni storiche da analizzare:
+${JSON.stringify(txsForAI, null, 2)}
+
+Rispondi rigorosamente in formato JSON rispettando lo schema specificato.`;
+
+    const response = await aiClient.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          required: ["suggestedRecurrences"],
+          properties: {
+            suggestedRecurrences: {
+              type: Type.ARRAY,
+              description: "Lista delle transazioni ricorrenti consigliate",
+              items: {
+                type: Type.OBJECT,
+                required: ["name", "keyword", "amount", "frequency", "scope", "category", "subcategory", "nextDueDate", "confidence"],
+                properties: {
+                  name: { type: Type.STRING, description: "Nome della ricorrenza" },
+                  keyword: { type: Type.STRING, description: "Parola chiave di matching" },
+                  amount: { type: Type.NUMBER, description: "Importo della scadenza" },
+                  frequency: { type: Type.STRING, description: "Frequenza (weekly, monthly, bi_monthly, quarterly, annual)" },
+                  scope: { type: Type.STRING, description: "Ambito (personal o professional)" },
+                  category: { type: Type.STRING, description: "Categoria di bilancio" },
+                  subcategory: { type: Type.STRING, description: "Sottocategoria di bilancio" },
+                  nextDueDate: { type: Type.STRING, description: "Prossima data di scadenza prevista (YYYY-MM-DD)" },
+                  confidence: { type: Type.STRING, description: "Grado di certezza (certain o possible)" }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const resultText = response.text || "{}";
+    res.json(JSON.parse(resultText));
+  } catch (error: any) {
+    console.error("Error analyzing recurrences:", error);
+    res.status(500).json({ error: "Errore durante l'analisi delle ricorrenze tramite Intelligenza Artificiale: " + error.message });
+  }
+});
+
+// Cash Flow Forecasting Endpoint
+app.get("/api/forecast", async (req, res) => {
+  try {
+    const isDemoMode = req.query.isDemoMode === 'true';
+    
+    // Get starting balances from all accounts in scope
+    const allAccounts = await dbOps.getAccounts();
+    const filteredAccounts = allAccounts.filter(a => isDemoMode ? a.isDemo === true : !a.isDemo);
+    
+    const startingBalance = filteredAccounts.reduce((sum, acc) => sum + acc.balance, 0);
+
+    // Get active recurring transactions
+    const recurrences = await (dbOps as any).getRecurringTransactions();
+    const activeRecs = recurrences.filter((r: any) => r.isActive && (isDemoMode ? r.isDemo === true : !r.isDemo));
+
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setMonth(endDate.getMonth() + 6); // 6 months forecast
+
+    const forecastEvents: { date: string; amount: number; name: string; scope: string; category: string; subcategory: string }[] = [];
+
+    // Helper to format Date objects as YYYY-MM-DD
+    const formatDate = (d: Date) => d.toISOString().split('T')[0];
+
+    // Project recurrence dates for the next 6 months
+    for (const r of activeRecs) {
+      let currentDate = new Date(r.nextDueDate);
+      if (isNaN(currentDate.getTime())) continue;
+
+      // If nextDueDate is in the past, let's catch it up to today
+      let safetyCounter = 0;
+      while (currentDate < startDate && safetyCounter < 100) {
+        safetyCounter++;
+        if (r.frequency === 'weekly') {
+          currentDate.setDate(currentDate.getDate() + 7);
+        } else if (r.frequency === 'monthly') {
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        } else if (r.frequency === 'bi_monthly') {
+          currentDate.setMonth(currentDate.getMonth() + 2);
+        } else if (r.frequency === 'quarterly') {
+          currentDate.setMonth(currentDate.getMonth() + 3);
+        } else if (r.frequency === 'annual') {
+          currentDate.setFullYear(currentDate.getFullYear() + 1);
+        } else {
+          break;
+        }
+      }
+
+      // Now generate all occurrences up to endDate
+      safetyCounter = 0;
+      while (currentDate <= endDate && safetyCounter < 100) {
+        safetyCounter++;
+        forecastEvents.push({
+          date: formatDate(currentDate),
+          amount: r.amount,
+          name: r.name,
+          scope: r.scope,
+          category: r.category,
+          subcategory: r.subcategory
+        });
+
+        // Advance by frequency
+        if (r.frequency === 'weekly') {
+          currentDate.setDate(currentDate.getDate() + 7);
+        } else if (r.frequency === 'monthly') {
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        } else if (r.frequency === 'bi_monthly') {
+          currentDate.setMonth(currentDate.getMonth() + 2);
+        } else if (r.frequency === 'quarterly') {
+          currentDate.setMonth(currentDate.getMonth() + 3);
+        } else if (r.frequency === 'annual') {
+          currentDate.setFullYear(currentDate.getFullYear() + 1);
+        } else {
+          break;
+        }
+      }
+    }
+
+    // Sort forecastEvents chronologically
+    forecastEvents.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Generate day-by-day projected balance curve
+    const dailyBalancePoints: { date: string; balance: number; personalBalance: number; professionalBalance: number }[] = [];
+    let currentBalance = startingBalance;
+    
+    // We also want to calculate scope-specific balances starting from their respective subsets
+    const personalStarting = filteredAccounts.filter(a => a.scope === 'personal' || a.scope === 'mixed').reduce((sum, acc) => sum + acc.balance, 0);
+    const professionalStarting = filteredAccounts.filter(a => a.scope === 'professional' || a.scope === 'mixed').reduce((sum, acc) => sum + acc.balance, 0);
+    
+    let currentPersonal = personalStarting;
+    let currentProfessional = professionalStarting;
+
+    // Loop through each day from today to endDate
+    const dateCursor = new Date(startDate);
+    
+    // Add today's starting point
+    dailyBalancePoints.push({
+      date: formatDate(dateCursor),
+      balance: Number(currentBalance.toFixed(2)),
+      personalBalance: Number(currentPersonal.toFixed(2)),
+      professionalBalance: Number(currentProfessional.toFixed(2))
+    });
+
+    let safetyDayCounter = 0;
+    while (dateCursor < endDate && safetyDayCounter < 300) {
+      safetyDayCounter++;
+      dateCursor.setDate(dateCursor.getDate() + 1);
+      const dateStr = formatDate(dateCursor);
+      
+      // Find all events on this day
+      const dayEvents = forecastEvents.filter(e => e.date === dateStr);
+      for (const e of dayEvents) {
+        currentBalance += e.amount;
+        if (e.scope === 'personal') {
+          currentPersonal += e.amount;
+        } else if (e.scope === 'professional') {
+          currentProfessional += e.amount;
+        } else {
+          currentPersonal += e.amount;
+          currentProfessional += e.amount;
+        }
+      }
+
+      dailyBalancePoints.push({
+        date: dateStr,
+        balance: Number(currentBalance.toFixed(2)),
+        personalBalance: Number(currentPersonal.toFixed(2)),
+        professionalBalance: Number(currentProfessional.toFixed(2))
+      });
+    }
+
+    res.json({
+      startingBalance,
+      forecastEvents,
+      dailyBalancePoints
+    });
+  } catch (error: any) {
+    console.error("Error generating forecast:", error);
+    res.status(500).json({ error: "Errore durante la generazione delle previsioni finanziarie: " + error.message });
+  }
+});
+
 // Settings API
 app.post("/api/settings", async (req, res) => {
   try {

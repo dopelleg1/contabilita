@@ -73,3 +73,19 @@ export interface Investment {
   currentValue: number;
   lastUpdated?: string;
 }
+
+export interface RecurringTransaction {
+  id: string;
+  name: string;
+  keyword: string;
+  amount: number;
+  frequency: 'weekly' | 'monthly' | 'bi_monthly' | 'quarterly' | 'annual';
+  scope: TransactionScope;
+  category: string;
+  subcategory: string;
+  accountId: string;
+  destinationAccountId?: string;
+  nextDueDate: string;
+  isActive: boolean;
+  isDemo?: boolean;
+}

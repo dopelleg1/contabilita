@@ -87,7 +87,7 @@ ${JSON.stringify(transactions, null, 2)}
 `;
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -216,7 +216,7 @@ Suddividi la risposta esattamente con le seguenti sezioni in italiano, usando ti
 Sii estremamente originale, evita formulazioni generiche sul budget. Parla di scadenze reali (es: acconti INPS, acconto tasse di Novembre o saldo di Giugno), consiglia buone pratiche italiane e mantieni un tono coinvolgente.`;
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         systemInstruction: "Sei un consulente finanziario professionista specializzato in ditte individuali e budget familiare italiano.",
@@ -416,7 +416,7 @@ ${financialProfileStr}
 `;
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: contentsPayload,
       config: {
         systemInstruction: systemInstruction,
@@ -476,7 +476,7 @@ Estrai accuratamente i seguenti campi ed esegui la formattazione strettamente in
 Rispondi solamente con un oggetto JSON valido basato sul seguente schema.`;
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: [imagePart, prompt],
       config: {
         responseMimeType: "application/json",
@@ -743,7 +743,7 @@ ${JSON.stringify(txsForAI, null, 2)}
 Rispondi rigorosamente in formato JSON rispettando lo schema specificato.`;
 
     const response = await aiClient.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",

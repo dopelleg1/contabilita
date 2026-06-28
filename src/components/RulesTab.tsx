@@ -407,11 +407,13 @@ export default function RulesTab({
                       <option value="necessarie">Necessaria (Cibo, Bollette casa, Mutui)</option>
                       <option value="utili">Utile (Corsi privati, Assicurazioni)</option>
                       <option value="tempo_libero">Tempo Libero (Intrattenimento, Ristoranti)</option>
+                      <option value="entrate">Entrata Personale (Stipendio, Pensioni, Entrate varie)</option>
                     </>
                   ) : (
                     <>
                       <option value="necessarie_lavoro">Necessaria Lavoro (Commercialista, Tasse, INPS)</option>
                       <option value="utili_lavoro">Utile Lavoro (Software cloud, Dispositivi)</option>
+                      <option value="entrate_lavoro">Entrata Lavoro (Spettanze e Fatture Clienti)</option>
                     </>
                   )}
                   <option value="trasferimento">Giroconto / Trasferimento tra conti</option>

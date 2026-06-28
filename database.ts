@@ -218,8 +218,58 @@ export const dbOps = {
         invoiceId: tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null
       }
     });
+
+    // Update account balances dynamically
+    try {
+      const amt = tx.amount;
+      if (tx.type === 'transfer' && tx.destinationAccountId) {
+        const absAmt = Math.abs(amt);
+        await prisma.account.update({
+          where: { id: tx.accountId },
+          data: { balance: { decrement: absAmt } }
+        });
+        await prisma.account.update({
+          where: { id: tx.destinationAccountId },
+          data: { balance: { increment: absAmt } }
+        });
+      } else {
+        await prisma.account.update({
+          where: { id: tx.accountId },
+          data: { balance: { increment: amt } }
+        });
+      }
+    } catch (err) {
+      console.error("Error updating account balance dynamically on create:", err);
+    }
   },
   updateTransaction: async (id: string, tx: any) => {
+    try {
+      // 1. Get the old transaction to undo its impact
+      const oldTx = await prisma.transaction.findUnique({ where: { id } });
+      if (oldTx) {
+        const oldAmt = oldTx.amount;
+        if (oldTx.type === 'transfer' && oldTx.destinationAccountId) {
+          const oldAbsAmt = Math.abs(oldAmt);
+          await prisma.account.update({
+            where: { id: oldTx.accountId },
+            data: { balance: { increment: oldAbsAmt } }
+          });
+          await prisma.account.update({
+            where: { id: oldTx.destinationAccountId },
+            data: { balance: { decrement: oldAbsAmt } }
+          });
+        } else {
+          await prisma.account.update({
+            where: { id: oldTx.accountId },
+            data: { balance: { decrement: oldAmt } }
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Error undoing old balance on update:", err);
+    }
+
+    // 2. Update the transaction
     await prisma.transaction.update({
       where: { id },
       data: {
@@ -242,8 +292,57 @@ export const dbOps = {
         invoiceId: tx.invoiceId !== undefined && tx.invoiceId !== null ? tx.invoiceId : null
       }
     });
+
+    try {
+      // 3. Apply the new transaction's impact
+      const amt = tx.amount;
+      if (tx.type === 'transfer' && tx.destinationAccountId) {
+        const absAmt = Math.abs(amt);
+        await prisma.account.update({
+          where: { id: tx.accountId },
+          data: { balance: { decrement: absAmt } }
+        });
+        await prisma.account.update({
+          where: { id: tx.destinationAccountId },
+          data: { balance: { increment: absAmt } }
+        });
+      } else {
+        await prisma.account.update({
+          where: { id: tx.accountId },
+          data: { balance: { increment: amt } }
+        });
+      }
+    } catch (err) {
+      console.error("Error applying new balance on update:", err);
+    }
   },
   deleteTransaction: async (id: string) => {
+    try {
+      // Get the transaction to undo its impact before deleting
+      const tx = await prisma.transaction.findUnique({ where: { id } });
+      if (tx) {
+        const amt = tx.amount;
+        if (tx.type === 'transfer' && tx.destinationAccountId) {
+          const absAmt = Math.abs(amt);
+          await prisma.account.update({
+            where: { id: tx.accountId },
+            data: { balance: { increment: absAmt } }
+          });
+          await prisma.account.update({
+            where: { id: tx.destinationAccountId },
+            data: { balance: { decrement: absAmt } }
+          });
+        } else {
+          await prisma.account.update({
+            where: { id: tx.accountId },
+            data: { balance: { decrement: amt } }
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Error updating account balance dynamically on delete:", err);
+    }
+
     await prisma.transaction.delete({ where: { id } });
   },
 

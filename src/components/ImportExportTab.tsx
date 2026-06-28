@@ -872,13 +872,23 @@ export default function ImportExportTab({
     // Pattern DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY (possibly followed by space or T and time)
     const dmyMatch = cleaned.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
     if (dmyMatch) {
-      let day = dmyMatch[1];
-      let month = dmyMatch[2];
+      let first = parseInt(dmyMatch[1], 10);
+      let second = parseInt(dmyMatch[2], 10);
       let year = dmyMatch[3];
-      if (day.length === 1) day = '0' + day;
-      if (month.length === 1) month = '0' + month;
       if (year.length === 2) year = '20' + year;
-      return `${year}-${month}-${day}`;
+      
+      let day = first;
+      let month = second;
+      
+      // Smart swap: if the second number (month position) is > 12, it is definitely MM/DD/YYYY format
+      if (second > 12 && first <= 12) {
+        day = second;
+        month = first;
+      }
+      
+      const dayStr = day.toString().padStart(2, '0');
+      const monthStr = month.toString().padStart(2, '0');
+      return `${year}-${monthStr}-${dayStr}`;
     }
     
     return cleaned;

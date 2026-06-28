@@ -655,29 +655,6 @@ app.delete("/api/rules/:id", async (req, res) => {
   }
 });
 
-// Temporary endpoint to configure environment variables safely
-app.get("/api/set-env-key", async (req, res) => {
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    const envPath = path.resolve(process.cwd(), '.env');
-    const db_url = "mysql://u903659692_walle:W%40l2010%21@92.113.22.5:3306/u903659692_walle";
-    let envContent = `DATABASE_URL="${db_url}"\n`;
-    envContent += `PORT=3000\n`;
-    envContent += `NODE_ENV=production\n`;
-    
-    const k1 = "AQ.Ab8RN6LlnHmG";
-    const k2 = "dJXt5DQXCzZKayfN";
-    const k3 = "qfYspGjw4pl8K-CfqvdINQ";
-    envContent += `GEMINI_API_KEY="${k1}${k2}${k3}"\n`;
-    
-    fs.writeFileSync(envPath, envContent);
-    res.json({ success: true, message: "Key configured successfully!" });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Recurring Transactions API
 app.get("/api/recurrences", async (req, res) => {
   try {

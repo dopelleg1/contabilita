@@ -55,6 +55,7 @@ model Transaction {
 
   @@map("transactions")
   @@index([accountId])
+  @@index([date])
 }
 
 model Rule {

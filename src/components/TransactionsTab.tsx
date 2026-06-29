@@ -186,6 +186,23 @@ export default function TransactionsTab({
 
   // Transfer automatic analyzer state
   const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
+
+  // Duplicate transaction analyzer state
+  const [showDuplicatePanel, setShowDuplicatePanel] = useState(false);
+  const [ignoredDuplicateIds, setIgnoredDuplicateIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('ignored_duplicate_tx_ids');
+      return saved ? JSON.parse(saved) : [];
+    } catch (_) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ignored_duplicate_tx_ids', JSON.stringify(ignoredDuplicateIds));
+    } catch (_) {}
+  }, [ignoredDuplicateIds]);
   const [time, setTime] = useState('');
   const [editTime, setEditTime] = useState('');
 
@@ -756,6 +773,119 @@ export default function TransactionsTab({
   const startIndex = (validatedPage - 1) * itemsPerPage;
   const paginatedTransactions = sortedTransactions.slice(startIndex, startIndex + itemsPerPage);
 
+  interface DuplicateGroup {
+    id: string;
+    type: 'certain' | 'possible' | 'transfer';
+    percentage: number;
+    reason: string;
+    transactions: Transaction[];
+  }
+
+  const getDuplicateGroups = (): DuplicateGroup[] => {
+    const activeTxs = transactions.filter(t => !ignoredDuplicateIds.includes(t.id));
+    const groups: DuplicateGroup[] = [];
+    const processedIds = new Set<string>();
+
+    // 1. Detect Giroconto duplicates (Transfer vs. Individual Expense + Income)
+    const transfers = activeTxs.filter(t => t.type === 'transfer' && t.destinationAccountId);
+    for (const t of transfers) {
+      if (processedIds.has(t.id)) continue;
+      const absAmt = Math.abs(t.amount);
+      const tTime = new Date(t.date).getTime();
+
+      // Find matching Expense (E) in source account
+      const expense = activeTxs.find(e => 
+        e.id !== t.id &&
+        e.accountId === t.accountId &&
+        Math.abs(e.amount) === absAmt &&
+        e.amount < 0 &&
+        e.type === 'expense' &&
+        Math.abs(new Date(e.date).getTime() - tTime) <= (1000 * 60 * 60 * 24)
+      );
+
+      // Find matching Income (I) in destination account
+      const income = activeTxs.find(i => 
+        i.id !== t.id &&
+        i.accountId === t.destinationAccountId &&
+        Math.abs(i.amount) === absAmt &&
+        i.amount > 0 &&
+        i.type === 'income' &&
+        Math.abs(new Date(i.date).getTime() - tTime) <= (1000 * 60 * 60 * 24)
+      );
+
+      if (expense && income) {
+        processedIds.add(t.id);
+        processedIds.add(expense.id);
+        processedIds.add(income.id);
+        groups.push({
+          id: `dup-transfer-${t.id}`,
+          type: 'transfer',
+          percentage: 75,
+          reason: `Il giroconto (€${absAmt.toFixed(2)}) è duplicato da una spesa singola su ${accounts.find(a => a.id === t.accountId)?.name || 'Conto A'} e un'entrata singola su ${accounts.find(a => a.id === t.destinationAccountId)?.name || 'Conto B'}`,
+          transactions: [t, expense, income]
+        });
+      }
+    }
+
+    // 2. Detect Standard Duplicates (Same account, same amount, same date or ±1 day)
+    const bucket: { [key: string]: Transaction[] } = {};
+    for (const tx of activeTxs) {
+      if (processedIds.has(tx.id)) continue;
+      const key = `${tx.accountId}_${Math.abs(tx.amount).toFixed(2)}`;
+      if (!bucket[key]) bucket[key] = [];
+      bucket[key].push(tx);
+    }
+
+    for (const key in bucket) {
+      const list = bucket[key];
+      if (list.length < 2) continue;
+
+      const sublist = [...list];
+      while (sublist.length > 1) {
+        const pivot = sublist.shift()!;
+        if (processedIds.has(pivot.id)) continue;
+
+        const pivotTime = new Date(pivot.date).getTime();
+        const matches: Transaction[] = [];
+        let type: 'certain' | 'possible' = 'possible';
+        let percentage = 50;
+        let reason = '';
+
+        for (let i = 0; i < sublist.length; i++) {
+          const candidate = sublist[i];
+          if (processedIds.has(candidate.id)) continue;
+
+          const candTime = new Date(candidate.date).getTime();
+          const diffDays = Math.abs(pivotTime - candTime) / (1000 * 60 * 60 * 24);
+
+          if (diffDays === 0) {
+            matches.push(candidate);
+            type = 'certain';
+            percentage = 90;
+            reason = `Transazioni identiche rilevate nello stesso giorno sullo stesso conto`;
+          } else if (diffDays === 1) {
+            matches.push(candidate);
+            reason = `Transazioni identiche rilevate a distanza di 1 giorno sullo stesso conto`;
+          }
+        }
+
+        if (matches.length > 0) {
+          const groupTxs = [pivot, ...matches];
+          groupTxs.forEach(t => processedIds.add(t.id));
+          groups.push({
+            id: `dup-std-${pivot.id}`,
+            type,
+            percentage,
+            reason: `${reason} (€${Math.abs(pivot.amount).toFixed(2)})`,
+            transactions: groupTxs
+          });
+        }
+      }
+    }
+
+    return groups;
+  };
+
   const formatEuro = (val: number) => {
     return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' }).format(val);
   };
@@ -779,6 +909,7 @@ export default function TransactionsTab({
               if (!showInvoicePanel) {
                 setShowAnalysisPanel(false);
                 setShowAddForm(false);
+                setShowDuplicatePanel(false);
               }
             }}
             className={`relative flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all border shadow-sm cursor-pointer ${
@@ -811,6 +942,7 @@ export default function TransactionsTab({
               if (!showAnalysisPanel) {
                 setShowInvoicePanel(false);
                 setShowAddForm(false);
+                setShowDuplicatePanel(false);
               }
             }}
             className={`relative flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all border shadow-sm cursor-pointer ${
@@ -828,6 +960,31 @@ export default function TransactionsTab({
             )}
           </button>
 
+          <button
+            id="btn-open-duplicates"
+            onClick={() => {
+              setShowDuplicatePanel(!showDuplicatePanel);
+              if (!showDuplicatePanel) {
+                setShowAnalysisPanel(false);
+                setShowInvoicePanel(false);
+                setShowAddForm(false);
+              }
+            }}
+            className={`relative flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-bold transition-all border shadow-sm cursor-pointer ${
+              showDuplicatePanel
+                ? "bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100/50"
+                : "bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <Layers className="w-4 h-4 text-amber-500" />
+            Pulisci Duplicati
+            {getDuplicateGroups().length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-amber-600 border border-white text-white text-[9px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
+                {getDuplicateGroups().length}
+              </span>
+            )}
+          </button>
+
           <button 
             id="btn-open-add-transaction"
             onClick={() => {
@@ -835,6 +992,7 @@ export default function TransactionsTab({
               if (!showAddForm) {
                 setShowAnalysisPanel(false);
                 setShowInvoicePanel(false);
+                setShowDuplicatePanel(false);
               }
             }}
             className="flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-all shadow-sm cursor-pointer"
@@ -986,6 +1144,117 @@ export default function TransactionsTab({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+      {showDuplicatePanel && (
+        <div className="bg-gradient-to-br from-slate-50 to-amber-50/20 border border-amber-100 p-6 rounded-2xl shadow-sm space-y-4 animate-fade-in" id="duplicate-analysis-panel">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-100 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-amber-600" />
+                Rilevamento Transazioni Duplicate / Triplicate
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5 font-medium">
+                Il sistema analizza lo storico per individuare movimenti con lo stesso conto e importo (90% se lo stesso giorno, 50% se ±1 giorno, e giroconti duplicati da coppie di transazioni singole).
+              </p>
+            </div>
+            <button
+              onClick={() => setShowDuplicatePanel(false)}
+              className="text-slate-400 hover:text-slate-600 p-1 hover:bg-slate-100 rounded-lg transition-all self-end sm:self-auto cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {getDuplicateGroups().length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center space-y-2">
+              <CheckCircle2 className="w-10 h-10 text-emerald-500 font-extrabold" />
+              <h4 className="text-sm font-bold text-slate-800">Nessun duplicato sospetto</h4>
+              <p className="text-xs text-slate-500 max-w-sm">
+                Tutte le transazioni nel database sono pulite. Non sono stati rilevati conflitti di data, importo o giroconti duplicati.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+              {getDuplicateGroups().map(group => (
+                <div key={group.id} className="bg-white border border-slate-100 rounded-xl p-4 shadow-sm space-y-3">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                          group.type === 'certain' 
+                            ? 'bg-red-50 text-red-700 border border-red-100'
+                            : group.type === 'transfer'
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
+                            : 'bg-amber-50 text-amber-700 border border-amber-100'
+                        }`}>
+                          {group.type === 'certain' ? 'Duplicato Certo 90%' : group.type === 'transfer' ? 'Duplicato Giroconto' : 'Duplicato Possibile 50%'}
+                        </span>
+                        <span className="text-[11px] font-semibold text-slate-700">{group.reason}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const ids = group.transactions.map(t => t.id);
+                        setIgnoredDuplicateIds(prev => [...prev, ...ids]);
+                        setSuccessMsg("Gruppo di duplicati ignorato con successo.");
+                        setTimeout(() => setSuccessMsg(''), 3000);
+                      }}
+                      className="text-[10px] text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 rounded font-bold border border-slate-200/60 transition-all cursor-pointer whitespace-nowrap"
+                    >
+                      Ignora / Accetta tutti
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto border border-slate-100 rounded-lg">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-100">
+                          <th className="p-2.5">Data</th>
+                          <th className="p-2.5">Conto</th>
+                          <th className="p-2.5">Descrizione</th>
+                          <th className="p-2.5 text-right font-semibold">Importo</th>
+                          <th className="p-2.5 text-center font-semibold">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {group.transactions.map(tx => (
+                          <tr key={tx.id} className="hover:bg-slate-50/50">
+                            <td className="p-2.5 font-mono whitespace-nowrap">{formatDateOnly(tx.date)}</td>
+                            <td className="p-2.5 font-semibold text-slate-800">
+                              {accounts.find(a => a.id === tx.accountId)?.name || 'Conto Sconosciuto'}
+                              {tx.destinationAccountId && (
+                                <span className="text-slate-400 text-[10px] block sm:inline"> ➔ {accounts.find(a => a.id === tx.destinationAccountId)?.name}</span>
+                              )}
+                            </td>
+                            <td className="p-2.5 truncate max-w-[200px]">{tx.description}</td>
+                            <td className={`p-2.5 text-right font-bold font-mono ${tx.amount > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {formatEuro(tx.amount)}
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <button
+                                onClick={() => {
+                                  if (confirm("Sei sicuro di voler eliminare questa specifica transazione duplicata? I saldi dei conti si aggiorneranno di conseguenza.")) {
+                                    onDeleteTransaction(tx.id);
+                                    setSuccessMsg("Transazione duplicata eliminata con successo.");
+                                    setTimeout(() => setSuccessMsg(''), 3000);
+                                  }
+                                }}
+                                className="text-rose-650 hover:text-white hover:bg-rose-600 p-1.5 rounded-lg border border-rose-100 hover:border-rose-600 transition-all cursor-pointer"
+                                title="Elimina questa transazione"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

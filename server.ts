@@ -25,6 +25,194 @@ initDb().then(() => {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
+import crypto from "crypto";
+
+// Helper to check password age and calculate days remaining (30-day policy)
+async function getPasswordDaysRemaining(): Promise<{ expired: boolean; daysRemaining: number }> {
+  const updatedAtStr = await dbOps.getSetting("auth_password_updated_at");
+  if (!updatedAtStr) {
+    return { expired: false, daysRemaining: 30 };
+  }
+  const updatedAt = new Date(updatedAtStr);
+  const now = new Date();
+  const diffTime = now.getTime() - updatedAt.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  const daysRemaining = 30 - diffDays;
+  return {
+    expired: daysRemaining <= 0,
+    daysRemaining
+  };
+}
+
+// Global authentication middleware
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const pathStr = req.path;
+  
+  // Exclude non-API routes, health, and public auth endpoints
+  if (!pathStr.startsWith('/api/') || pathStr.startsWith('/api/auth/') || pathStr === '/api/health') {
+    return next();
+  }
+
+  try {
+    // If password has not been configured yet (first-time run), allow access to facilitate setup
+    const passHash = await dbOps.getSetting("auth_password_hash");
+    const passSalt = await dbOps.getSetting("auth_password_salt");
+    if (!passHash || !passSalt) {
+      return next();
+    }
+
+    const token = req.header('X-Auth-Token');
+    const storedToken = await dbOps.getSetting("auth_session_token");
+    console.log(`[AUTH CHECK] Path: ${pathStr}, Received Token: "${token}", Stored Token: "${storedToken}"`);
+
+    if (!token || !storedToken || token !== storedToken) {
+      return res.status(401).json({ error: "Accesso non autorizzato. Reinserisci la password." });
+    }
+
+    next();
+  } catch (err) {
+    console.error("Auth Middleware Error:", err);
+    res.status(500).json({ error: "Errore interno durante la verifica della sessione." });
+  }
+}
+
+app.use(requireAuth);
+
+// --- AUTHENTICATION API ROUTES ---
+
+// 1. Get status of authentication (is initialized? is expired?)
+app.get("/api/auth/status", async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  try {
+    const hasPassword = !!(await dbOps.getSetting("auth_password_hash")) && !!(await dbOps.getSetting("auth_password_salt"));
+    if (!hasPassword) {
+      return res.json({ initialized: false, expired: false, daysRemaining: 30 });
+    }
+    const { expired, daysRemaining } = await getPasswordDaysRemaining();
+    res.json({ initialized: true, expired, daysRemaining });
+  } catch (err) {
+    res.status(500).json({ error: "Errore nel recupero dello stato di autenticazione." });
+  }
+});
+
+// 2. Setup the passphrase for the first time
+app.post("/api/auth/setup", async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 8) {
+      return res.status(400).json({ error: "La password deve essere di almeno 8 caratteri." });
+    }
+    
+    // Check if already setup to prevent overwriting without old password
+    const hasPassword = await dbOps.getSetting("auth_password_hash");
+    if (hasPassword) {
+      return res.status(400).json({ error: "Password già impostata. Usa la procedura di cambio password." });
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.createHash('sha256').update(salt + password).digest('hex');
+
+    await dbOps.setSetting("auth_password_hash", hash);
+    await dbOps.setSetting("auth_password_salt", salt);
+    await dbOps.setSetting("auth_password_updated_at", new Date().toISOString());
+
+    // Generate active session token
+    const token = crypto.randomBytes(32).toString('hex');
+    await dbOps.setSetting("auth_session_token", token);
+
+    res.json({ success: true, token, expired: false, daysRemaining: 30 });
+  } catch (err) {
+    console.error("Auth Setup Error:", err);
+    res.status(500).json({ error: "Errore durante la configurazione iniziale della password." });
+  }
+});
+
+// 3. Login with passphrase
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ error: "Password richiesta." });
+    }
+
+    const hash = await dbOps.getSetting("auth_password_hash");
+    const salt = await dbOps.getSetting("auth_password_salt");
+
+    if (!hash || !salt) {
+      return res.status(400).json({ error: "Password non configurata." });
+    }
+
+    const testHash = crypto.createHash('sha256').update(salt + password).digest('hex');
+    if (testHash !== hash) {
+      return res.status(401).json({ error: "Password errata." });
+    }
+
+    // Success - generate fresh session token
+    const token = crypto.randomBytes(32).toString('hex');
+    await dbOps.setSetting("auth_session_token", token);
+
+    const { expired, daysRemaining } = await getPasswordDaysRemaining();
+    res.json({ success: true, token, expired, daysRemaining });
+  } catch (err) {
+    console.error("Login Error:", err);
+    res.status(500).json({ error: "Errore durante il login." });
+  }
+});
+
+// 4. Change passphrase (requires active or expired auth token)
+app.post("/api/auth/change", async (req, res) => {
+  try {
+    const token = req.header('X-Auth-Token');
+    const storedToken = await dbOps.getSetting("auth_session_token");
+    const hasPassword = await dbOps.getSetting("auth_password_hash");
+
+    if (hasPassword && (!token || !storedToken || token !== storedToken)) {
+      return res.status(401).json({ error: "Sessione non valida o scaduta per il cambio password." });
+    }
+
+    const { oldPassword, newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: "La nuova password deve essere di almeno 8 caratteri." });
+    }
+
+    if (hasPassword) {
+      const hash = await dbOps.getSetting("auth_password_hash");
+      const salt = await dbOps.getSetting("auth_password_salt");
+      if (hash && salt) {
+        const testHash = crypto.createHash('sha256').update(salt + oldPassword).digest('hex');
+        if (testHash !== hash) {
+          return res.status(400).json({ error: "La password attuale inserita non è corretta." });
+        }
+      }
+    }
+
+    const newSalt = crypto.randomBytes(16).toString('hex');
+    const newHash = crypto.createHash('sha256').update(newSalt + newPassword).digest('hex');
+
+    await dbOps.setSetting("auth_password_hash", newHash);
+    await dbOps.setSetting("auth_password_salt", newSalt);
+    await dbOps.setSetting("auth_password_updated_at", new Date().toISOString());
+
+    const newToken = crypto.randomBytes(32).toString('hex');
+    await dbOps.setSetting("auth_session_token", newToken);
+
+    res.json({ success: true, token: newToken, expired: false, daysRemaining: 30 });
+  } catch (err) {
+    console.error("Change password error:", err);
+    res.status(500).json({ error: "Errore durante il cambio della password." });
+  }
+});
+
+// 5. Logout
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    await dbOps.setSetting("auth_session_token", "");
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Errore durante la disconnessione." });
+  }
+});
+
 const PORT = 3000;
 
 // Initialize Gemini SDK with telemetry header
@@ -527,6 +715,10 @@ app.get("/api/db-state", async (req, res) => {
       await dbOps.setSetting("investments_data", investmentsStr);
     }
     const investments = JSON.parse(investmentsStr);
+
+    const authPasswordHash = await dbOps.getSetting("auth_password_hash");
+    const authPasswordSalt = await dbOps.getSetting("auth_password_salt");
+    const authPasswordUpdatedAt = await dbOps.getSetting("auth_password_updated_at");
     
     res.json({
       accounts,
@@ -536,11 +728,14 @@ app.get("/api/db-state", async (req, res) => {
       taxpayerCf,
       salaryDayOfMonth,
       cycleDurationDays,
-      investments
+      investments,
+      authPasswordHash,
+      authPasswordSalt,
+      authPasswordUpdatedAt
     });
   } catch (error) {
     console.error("Error reading db-state:", error);
-    res.status(500).json({ error: "Errore durante il caricamento del database SQLite." });
+    res.status(500).json({ error: "Errore durante il caricamento del database." });
   }
 });
 

@@ -19,6 +19,7 @@ import RulesTab from './components/RulesTab';
 import ImportExportTab from './components/ImportExportTab';
 import AiAdvisorTab from './components/AiAdvisorTab';
 import ForecastsTab from './components/ForecastsTab';
+import { apiFetch as fetch } from './lib/api';
 
 import { 
   LayoutDashboard, 
@@ -39,7 +40,8 @@ import {
   Database,
   ShieldCheck,
   Trash2,
-  Calendar
+  Calendar,
+  LogOut
 } from 'lucide-react';
 
 export default function App() {
@@ -55,6 +57,208 @@ export default function App() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [profileNameInput, setProfileNameInput] = useState(taxpayerName);
   const [profileCfInput, setProfileCfInput] = useState(taxpayerCf);
+
+  // Authentication & Security States for Single-User Passphrase Protection
+  const [isAuthInitialized, setIsAuthInitialized] = useState<boolean>(true);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthExpired, setIsAuthExpired] = useState<boolean>(false);
+  const [authDaysRemaining, setAuthDaysRemaining] = useState<number>(30);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [authPasswordInput, setAuthPasswordInput] = useState<string>('');
+  const [authConfirmPasswordInput, setAuthConfirmPasswordInput] = useState<string>('');
+  const [authOldPasswordInput, setAuthOldPasswordInput] = useState<string>('');
+  const [authNewPasswordInput, setAuthNewPasswordInput] = useState<string>('');
+  const [authError, setAuthError] = useState<string>('');
+  const [authSuccessMsg, setAuthSuccessMsg] = useState<string>('');
+  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
+  const [authPasswordHash, setAuthPasswordHash] = useState<string>('');
+  const [authPasswordSalt, setAuthPasswordSalt] = useState<string>('');
+  const [authPasswordUpdatedAt, setAuthPasswordUpdatedAt] = useState<string>('');
+
+  const checkAuthStatus = async () => {
+    try {
+      setAuthLoading(true);
+      setAuthError('');
+      const statusRes = await fetch('/api/auth/status');
+      if (!statusRes.ok) {
+        throw new Error("Impossibile caricare lo stato auth");
+      }
+      const statusData = await statusRes.json();
+      setIsAuthInitialized(statusData.initialized);
+      setIsAuthExpired(statusData.expired);
+      setAuthDaysRemaining(statusData.daysRemaining);
+
+      if (!statusData.initialized) {
+        // No password is set yet. We don't block anything, but let them setup immediately.
+        setIsAuthenticated(true);
+        setIsLoaded(true);
+      } else {
+        // Password is set. Let's see if we have a valid token
+        const savedToken = localStorage.getItem('contosmart_auth_token');
+        if (savedToken) {
+          // Attempt to fetch DB state to verify token validity
+          const stateRes = await fetch('/api/db-state');
+          if (stateRes.ok) {
+            setIsAuthenticated(true);
+            const data = await stateRes.json();
+            if (data.accounts) setAccounts(data.accounts);
+            if (data.transactions) setTransactions(data.transactions);
+            if (data.rules) setRules(data.rules);
+            if (data.taxpayerName) {
+              setTaxpayerName(data.taxpayerName);
+              setProfileNameInput(data.taxpayerName);
+            }
+            if (data.taxpayerCf) {
+              setTaxpayerCf(data.taxpayerCf);
+              setProfileCfInput(data.taxpayerCf);
+            }
+            if (data.salaryDayOfMonth !== undefined) setSalaryDayOfMonth(data.salaryDayOfMonth);
+            if (data.cycleDurationDays !== undefined) setCycleDurationDays(data.cycleDurationDays);
+            if (data.investments) setInvestments(data.investments);
+            if (data.authPasswordHash) setAuthPasswordHash(data.authPasswordHash);
+            if (data.authPasswordSalt) setAuthPasswordSalt(data.authPasswordSalt);
+            if (data.authPasswordUpdatedAt) setAuthPasswordUpdatedAt(data.authPasswordUpdatedAt);
+            setIsLoaded(true);
+          } else if (stateRes.status === 401) {
+            // Token is invalid/expired
+            setIsAuthenticated(false);
+            localStorage.removeItem('contosmart_auth_token');
+          }
+        } else {
+          setIsAuthenticated(false);
+        }
+      }
+    } catch (err: any) {
+      console.error("Auth status check failed:", err);
+      setAuthError("Errore di connessione al server.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Listen for global unauthorized events (token invalidated or expired)
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+      localStorage.removeItem('contosmart_auth_token');
+    };
+    window.addEventListener('auth-unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth-unauthorized', handleUnauthorized);
+  }, []);
+
+  const handleAuthSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    if (authPasswordInput.length < 8) {
+      setAuthError('La password deve essere lunga almeno 8 caratteri.');
+      return;
+    }
+    if (authPasswordInput !== authConfirmPasswordInput) {
+      setAuthError('Le password non coincidono.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: authPasswordInput })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Impossibile configurare la password.');
+        return;
+      }
+      localStorage.setItem('contosmart_auth_token', data.token);
+      setIsAuthenticated(true);
+      setIsAuthInitialized(true);
+      setIsAuthExpired(false);
+      setAuthDaysRemaining(30);
+      setAuthPasswordInput('');
+      setAuthConfirmPasswordInput('');
+      refreshDbState();
+    } catch (err) {
+      setAuthError('Errore di connessione.');
+    }
+  };
+
+  const handleAuthLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: authPasswordInput })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Password errata.');
+        return;
+      }
+      localStorage.setItem('contosmart_auth_token', data.token);
+      setIsAuthenticated(true);
+      setIsAuthExpired(data.expired);
+      setAuthDaysRemaining(data.daysRemaining);
+      setAuthPasswordInput('');
+      refreshDbState();
+    } catch (err) {
+      setAuthError('Errore di connessione.');
+    }
+  };
+
+  const handleAuthChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccessMsg('');
+    if (authNewPasswordInput.length < 8) {
+      setAuthError('La nuova password deve essere lunga almeno 8 caratteri.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/change', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Token': localStorage.getItem('contosmart_auth_token') || ''
+        },
+        body: JSON.stringify({
+          oldPassword: authOldPasswordInput,
+          newPassword: authNewPasswordInput
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.error || 'Impossibile cambiare la password.');
+        return;
+      }
+      localStorage.setItem('contosmart_auth_token', data.token);
+      setIsAuthExpired(false);
+      setAuthDaysRemaining(30);
+      setAuthOldPasswordInput('');
+      setAuthNewPasswordInput('');
+      setAuthSuccessMsg('Passphrase modificata con successo!');
+      refreshDbState();
+    } catch (err) {
+      setAuthError('Errore di connessione.');
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'X-Auth-Token': localStorage.getItem('contosmart_auth_token') || '' }
+      });
+    } catch (_) {}
+    localStorage.removeItem('contosmart_auth_token');
+    setIsAuthenticated(false);
+    setAuthPasswordInput('');
+    setAuthConfirmPasswordInput('');
+    setAuthOldPasswordInput('');
+    setAuthNewPasswordInput('');
+    setAuthError('');
+    setAuthSuccessMsg('');
+  };
 
   // Custom non-blocking interactive confirmation dialog
   const [customConfirm, setCustomConfirm] = useState<{
@@ -205,7 +409,7 @@ export default function App() {
 
   // Load from SQLite database on component mount
   useEffect(() => {
-    refreshDbState();
+    checkAuthStatus();
   }, []);
 
   // Sync to LocalStorage as a local fallback
@@ -1205,6 +1409,179 @@ export default function App() {
     });
   };
 
+  if (authLoading && !isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-white relative overflow-hidden">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] bg-indigo-900/20 rounded-full blur-[80px] pointer-events-none"></div>
+        <div className="flex flex-col items-center gap-4 text-center">
+          <RefreshCw className="w-10 h-10 text-indigo-500 animate-spin" />
+          <p className="text-sm font-semibold text-slate-400">Verifica sessione in corso...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    if (!isAuthInitialized) {
+      // Setup screen
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-white relative overflow-hidden">
+          <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-indigo-900/10 rounded-full blur-[100px] pointer-events-none"></div>
+          <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-[400px] h-[400px] bg-emerald-900/10 rounded-full blur-[100px] pointer-events-none"></div>
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
+            <div className="text-center space-y-3">
+              <div className="mx-auto w-12 h-12 bg-indigo-500/15 rounded-2xl flex items-center justify-center text-indigo-400 border border-indigo-500/30">
+                <Lock className="w-6 h-6 animate-pulse" />
+              </div>
+              <h2 className="text-xl font-extrabold tracking-tight font-sans">Configura la Sicurezza</h2>
+              <p className="text-xs text-slate-400 leading-relaxed font-sans">
+                Proteggi i tuoi dati contabili e di fatturazione. Scegli una password forte o una frase d'accesso (passphrase) per proteggere la tua contabilità monoutente.
+              </p>
+            </div>
+            <form onSubmit={handleAuthSetup} className="space-y-4">
+              <div className="space-y-1.5 text-left">
+                <label className="text-[11px] font-bold tracking-wide text-slate-400 uppercase font-sans">Scegli Password / Passphrase</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Almeno 8 caratteri (es. sole-giallo-mare-2026!)"
+                  value={authPasswordInput}
+                  onChange={(e) => setAuthPasswordInput(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-sans placeholder-slate-605 transition-all"
+                />
+              </div>
+              <div className="space-y-1.5 text-left">
+                <label className="text-[11px] font-bold tracking-wide text-slate-400 uppercase font-sans">Conferma Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Reinserisci la stessa password"
+                  value={authConfirmPasswordInput}
+                  onChange={(e) => setAuthConfirmPasswordInput(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-sans placeholder-slate-605 transition-all"
+                />
+              </div>
+              {authError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs py-2 px-3.5 rounded-xl text-left font-sans">
+                  ⚠️ {authError}
+                </div>
+              )}
+              <button
+                type="submit"
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-lg shadow-indigo-600/20 cursor-pointer font-sans"
+              >
+                Configura e Accedi
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    } else {
+      // Login screen
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-white relative overflow-hidden">
+          <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-indigo-900/10 rounded-full blur-[100px] pointer-events-none"></div>
+          <div className="absolute bottom-1/4 right-1/4 translate-x-1/2 translate-y-1/2 w-[400px] h-[400px] bg-emerald-900/10 rounded-full blur-[100px] pointer-events-none"></div>
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
+            <div className="text-center space-y-3">
+              <div className="mx-auto w-12 h-12 bg-indigo-500/15 rounded-2xl flex items-center justify-center text-indigo-400 border border-indigo-500/30">
+                <Lock className="w-6 h-6" />
+              </div>
+              <h2 className="text-xl font-extrabold tracking-tight font-sans">ContoSmart Cassaforte</h2>
+              <p className="text-xs text-slate-400 leading-relaxed font-sans">
+                Il database di <span className="font-semibold text-slate-200">{taxpayerName}</span> è protetto. Inserisci la tua passphrase d'accesso per sbloccare la contabilità.
+              </p>
+            </div>
+            <form onSubmit={handleAuthLogin} className="space-y-4">
+              <div className="space-y-1.5 text-left">
+                <label className="text-[11px] font-bold tracking-wide text-slate-400 uppercase font-sans">Passphrase di Sblocco</label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  placeholder="Inserisci la tua passphrase di sicurezza"
+                  value={authPasswordInput}
+                  onChange={(e) => setAuthPasswordInput(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-sans placeholder-slate-605 transition-all"
+                />
+              </div>
+              {authError && (
+                <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs py-2 px-3.5 rounded-xl text-left font-sans">
+                  ⚠️ {authError}
+                </div>
+              )}
+              <button
+                type="submit"
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-lg shadow-indigo-600/20 cursor-pointer font-sans"
+              >
+                Sblocca Contabilità
+              </button>
+            </form>
+            <div className="text-center">
+              <p className="text-[10px] text-slate-500 font-sans">
+                Protezione monoutente con scadenza ciclica di 30 giorni attiva.
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
+
+  if (isAuthExpired) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-white relative overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-amber-900/10 rounded-full blur-[100px] pointer-events-none"></div>
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
+          <div className="text-center space-y-3">
+            <div className="mx-auto w-12 h-12 bg-amber-500/15 rounded-2xl flex items-center justify-center text-amber-400 border border-amber-500/30">
+              <AlertTriangle className="w-6 h-6 animate-pulse" />
+            </div>
+            <h2 className="text-xl font-extrabold tracking-tight text-amber-400 font-sans">Passphrase Scaduta!</h2>
+            <p className="text-xs text-slate-400 leading-relaxed font-sans">
+              Sono trascorsi 30 giorni dall'ultimo aggiornamento della password. Per motivi di sicurezza e tutela del contribuente, è necessario aggiornare la passphrase d'accesso per continuare.
+            </p>
+          </div>
+          <form onSubmit={handleAuthChange} className="space-y-4">
+            <div className="space-y-1.5 text-left">
+              <label className="text-[11px] font-bold tracking-wide text-slate-400 uppercase font-sans">Vecchia Passphrase Attuale</label>
+              <input
+                type="password"
+                required
+                placeholder="Inserisci la password scaduta"
+                value={authOldPasswordInput}
+                onChange={(e) => setAuthOldPasswordInput(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-sans placeholder-slate-605 transition-all"
+              />
+            </div>
+            <div className="space-y-1.5 text-left">
+              <label className="text-[11px] font-bold tracking-wide text-slate-400 uppercase font-sans">Nuova Passphrase di Sicurezza</label>
+              <input
+                type="password"
+                required
+                placeholder="Almeno 8 caratteri (es. uva-rossa-vite-2026!)"
+                value={authNewPasswordInput}
+                onChange={(e) => setAuthNewPasswordInput(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-sans placeholder-slate-605 transition-all"
+              />
+            </div>
+            {authError && (
+              <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs py-2 px-3.5 rounded-xl text-left font-sans">
+                ⚠️ {authError}
+              </div>
+            )}
+            <button
+              type="submit"
+              className="w-full py-3 bg-amber-600 hover:bg-amber-500 active:scale-[0.98] text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-lg shadow-amber-600/20 cursor-pointer font-sans"
+            >
+              Aggiorna e Accedi
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans" id="app-root">
       
@@ -1360,6 +1737,26 @@ export default function App() {
               <Lock className="w-3.5 h-3.5 text-indigo-400" />
               <span className="text-[10px] font-semibold text-slate-400 font-sans">Database crittografato locale</span>
             </div>
+
+            {isAuthInitialized && (
+              <div className="flex items-center justify-between px-2 text-[10px] text-slate-500 font-medium">
+                <span className="text-[9.5px] text-slate-500 font-sans">Passphrase valida per:</span>
+                <span className={`text-[10px] font-bold font-sans px-1.5 py-0.5 rounded ${
+                  authDaysRemaining <= 5 ? 'bg-rose-500/10 text-rose-400' : 'bg-indigo-500/10 text-indigo-400'
+                }`}>
+                  {authDaysRemaining} gg
+                </span>
+              </div>
+            )}
+
+            <button 
+              id="btn-auth-logout"
+              onClick={handleLogout}
+              className="w-full text-left text-[10px] text-slate-400 hover:text-rose-400 font-bold px-2 mt-4 flex items-center gap-1.5 pt-3 border-t border-slate-800/60 transition-all cursor-pointer"
+            >
+              <LogOut className="w-3 h-3 text-rose-400" />
+              Blocca & Disconnetti
+            </button>
             
             <button 
               id="btn-clear-transactions"
@@ -1603,6 +2000,64 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {isAuthInitialized && (
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsChangingPassword(!isChangingPassword);
+                    setAuthError('');
+                    setAuthSuccessMsg('');
+                    setAuthOldPasswordInput('');
+                    setAuthNewPasswordInput('');
+                  }}
+                  className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  {isChangingPassword ? "Nascondi cambio password" : "Cambia Passphrase di Sicurezza"}
+                </button>
+
+                {isChangingPassword && (
+                  <form onSubmit={handleAuthChange} className="mt-3 space-y-3 p-3 bg-slate-50 rounded-xl border border-slate-150 text-left">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">Vecchia Passphrase</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Inserisci la password corrente"
+                        value={authOldPasswordInput}
+                        onChange={(e) => setAuthOldPasswordInput(e.target.value)}
+                        className="w-full text-xs bg-white border border-slate-200 text-slate-800 rounded px-2.5 py-1.5 outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">Nuova Passphrase</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="Minimo 8 caratteri"
+                        value={authNewPasswordInput}
+                        onChange={(e) => setAuthNewPasswordInput(e.target.value)}
+                        className="w-full text-xs bg-white border border-slate-200 text-slate-800 rounded px-2.5 py-1.5 outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    {authError && (
+                      <p className="text-[10px] text-rose-600 font-medium">⚠️ {authError}</p>
+                    )}
+                    {authSuccessMsg && (
+                      <p className="text-[10px] text-emerald-600 font-medium">✅ {authSuccessMsg}</p>
+                    )}
+                    <button
+                      type="submit"
+                      className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-bold transition-all cursor-pointer text-center"
+                    >
+                      Salva Nuova Passphrase
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 pt-2">
               <button 

@@ -221,6 +221,9 @@ export default function TransactionsTab({
   const [editCustomer, setEditCustomer] = useState('');
   const [editInvoiceId, setEditInvoiceId] = useState('');
 
+  // UI state for matching orphan transfers
+  const [selectedOrphanSource, setSelectedOrphanSource] = useState<Record<string, string>>({});
+
   // Clean stream when unmounting
   useEffect(() => {
     return () => {
@@ -652,6 +655,141 @@ export default function TransactionsTab({
     return matches;
   }, [transactions]);
 
+  // Memoized transfer inconsistencies calculation
+  const transferInconsistencies = React.useMemo(() => {
+    const list: Array<{
+      type: 'orphan_transfer' | 'orphan_credit';
+      transaction: Transaction;
+      reason: string;
+    }> = [];
+
+    const parseDate = (dStr: string) => {
+      const clean = dStr.split('T')[0].split(' ')[0]; // yyyy-mm-dd
+      const parts = clean.split('-');
+      if (parts.length === 3) {
+        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])).getTime();
+      }
+      return new Date(clean).getTime();
+    };
+
+    transactions.forEach(tx => {
+      // 1. Check for Orphan Transfers (debit with destinationAccountId set but no linked counterpart and no matching credit found in DB)
+      if (tx.amount < 0 && tx.type === 'transfer' && tx.destinationAccountId) {
+        const isLinkedValid = tx.linkedTransactionId && transactions.some(t => t.id === tx.linkedTransactionId);
+        
+        if (!isLinkedValid) {
+          const hasPotentialMatch = transactions.some(t => 
+            t.accountId === tx.destinationAccountId &&
+            t.amount === Math.abs(tx.amount) &&
+            Math.abs(parseDate(t.date) - parseDate(tx.date)) / (1000 * 60 * 60 * 24) <= 3
+          );
+          
+          if (!hasPotentialMatch) {
+            const sourceName = accounts.find(a => a.id === tx.accountId)?.name || 'Conto';
+            const destName = accounts.find(a => a.id === tx.destinationAccountId)?.name || 'Destinazione';
+            list.push({
+              type: 'orphan_transfer',
+              transaction: tx,
+              reason: `Addebito di giroconto di ${Math.abs(tx.amount).toFixed(2)} € registrato su ${sourceName} verso ${destName} ma senza riscontro di accredito (+${Math.abs(tx.amount).toFixed(2)} €) nei conti.`
+            });
+          }
+        }
+      }
+
+      // 2. Check for Orphan Credits (credit with transfer category but no linked counterpart and no matching debit found in DB)
+      const isTransferCategory = tx.category === 'trasferimento' || tx.subcategory === 'Giroconto' || tx.description.toLowerCase().includes('giroconto') || tx.description.toLowerCase().includes('ricezione giroconto');
+      if (tx.amount > 0 && isTransferCategory) {
+        const isLinkedValid = tx.linkedTransactionId && transactions.some(t => t.id === tx.linkedTransactionId);
+        
+        if (!isLinkedValid) {
+          const hasPotentialMatch = transactions.some(t => 
+            t.amount === -tx.amount &&
+            (t.destinationAccountId === tx.accountId || t.type === 'transfer') &&
+            Math.abs(parseDate(t.date) - parseDate(tx.date)) / (1000 * 60 * 60 * 24) <= 3
+          );
+
+          if (!hasPotentialMatch) {
+            const destName = accounts.find(a => a.id === tx.accountId)?.name || 'Conto';
+            list.push({
+              type: 'orphan_credit',
+              transaction: tx,
+              reason: `Accredito di Giroconto ricevuto su ${destName} (+${tx.amount.toFixed(2)} €) ma non collegato ad alcun addebito speculare in uscita.`
+            });
+          }
+        }
+      }
+    });
+
+    return list;
+  }, [transactions, accounts]);
+
+  const handleCreateMatchingCredit = (tx: Transaction) => {
+    const sourceAccName = accounts.find(a => a.id === tx.accountId)?.name || 'Conto';
+    const destAccName = accounts.find(a => a.id === tx.destinationAccountId)?.name || 'Destinazione';
+    const newTxId = `tx-smart-matching-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const matchedCredit: Transaction = {
+      id: newTxId,
+      date: tx.date,
+      description: `Ricezione Giroconto da ${sourceAccName}`,
+      amount: Math.abs(tx.amount),
+      accountId: tx.destinationAccountId!,
+      type: 'income',
+      category: 'trasferimento' as any,
+      subcategory: 'Giroconto',
+      scope: tx.scope,
+      isVerified: tx.isVerified,
+      isDemo: tx.isDemo,
+      linkedTransactionId: tx.id
+    };
+
+    onAddTransaction(matchedCredit);
+
+    setTimeout(() => {
+      onUpdateTransaction(tx.id, {
+        linkedTransactionId: newTxId,
+        description: `Giroconto: Trasferimento fondi (${sourceAccName} ➔ ${destAccName})`
+      });
+    }, 150);
+
+    setSuccessMsg("Creato accredito speculare e collegato con successo!");
+    setTimeout(() => setSuccessMsg(""), 3000);
+  };
+
+  const handleCreateMatchingDebit = (tx: Transaction, sourceAccountId: string) => {
+    const destAccName = accounts.find(a => a.id === tx.accountId)?.name || 'Destinazione';
+    const sourceAccName = accounts.find(a => a.id === sourceAccountId)?.name || 'Conto';
+    const newTxId = `tx-smart-matching-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const matchedDebit: Transaction = {
+      id: newTxId,
+      date: tx.date,
+      description: `Giroconto: Trasferimento fondi (${sourceAccName} ➔ ${destAccName})`,
+      amount: -Math.abs(tx.amount),
+      accountId: sourceAccountId,
+      destinationAccountId: tx.accountId,
+      type: 'transfer',
+      category: 'trasferimento' as any,
+      subcategory: 'Giroconto',
+      scope: tx.scope,
+      isVerified: tx.isVerified,
+      isDemo: tx.isDemo,
+      linkedTransactionId: tx.id
+    };
+
+    onAddTransaction(matchedDebit);
+
+    setTimeout(() => {
+      onUpdateTransaction(tx.id, {
+        linkedTransactionId: newTxId,
+        description: `Ricezione Giroconto da ${sourceAccName}`
+      });
+    }, 150);
+
+    setSuccessMsg("Creato addebito speculare e collegato con successo!");
+    setTimeout(() => setSuccessMsg(""), 3000);
+  };
+
   // Handle linking two existing transactions as a giroconto
   const handleLinkGiroconti = (exp: Transaction, inc: Transaction) => {
     const expAccName = accounts.find(a => a.id === exp.accountId)?.name || 'Origine';
@@ -709,7 +847,9 @@ export default function TransactionsTab({
     const matchSearch = tx.description.toLowerCase().includes(term) || tx.subcategory.toLowerCase().includes(term);
     
     // 2. Account toggle filter ("tutti, alcuni o solo uno")
-    const matchAccount = selectedAccounts.includes('all') || selectedAccounts.includes(tx.accountId);
+    const matchAccount = selectedAccounts.includes('all') || 
+      selectedAccounts.includes(tx.accountId) || 
+      (tx.destinationAccountId !== null && selectedAccounts.includes(tx.destinationAccountId));
     
     // 2b. Exclude Financing / loan accounts if toggle is active
     if (excludeFinancing) {
@@ -763,9 +903,18 @@ export default function TransactionsTab({
 
   // Calculate totals over the filtered selection for display under Amount column
   const totalFilteredCount = sortedTransactions.length;
-  const totalFilteredAmount = sortedTransactions.reduce((acc, tx) => acc + tx.amount, 0);
-  const totalFilteredIncome = sortedTransactions.filter(tx => tx.amount > 0).reduce((acc, tx) => acc + tx.amount, 0);
-  const totalFilteredExpense = sortedTransactions.filter(tx => tx.amount < 0).reduce((acc, tx) => acc + tx.amount, 0);
+  const getDisplayAmount = (t: Transaction) => {
+    const isViewingDestinationOnly = 
+      t.destinationAccountId && 
+      !selectedAccounts.includes('all') && 
+      selectedAccounts.includes(t.destinationAccountId) && 
+      !selectedAccounts.includes(t.accountId);
+    return isViewingDestinationOnly ? Math.abs(t.amount) : t.amount;
+  };
+
+  const totalFilteredAmount = sortedTransactions.reduce((acc, tx) => acc + getDisplayAmount(tx), 0);
+  const totalFilteredIncome = sortedTransactions.filter(tx => getDisplayAmount(tx) > 0).reduce((acc, tx) => acc + getDisplayAmount(tx), 0);
+  const totalFilteredExpense = sortedTransactions.filter(tx => getDisplayAmount(tx) < 0).reduce((acc, tx) => acc + getDisplayAmount(tx), 0);
 
   // Pagination bounds and slices (50 at a time)
   const totalPages = Math.ceil(totalFilteredCount / itemsPerPage) || 1;
@@ -953,9 +1102,9 @@ export default function TransactionsTab({
           >
             <ArrowRightLeft className="w-4 h-4 text-blue-600" />
             Analizza Giroconti
-            {potentials.length > 0 && (
+            {(potentials.length + transferInconsistencies.length) > 0 && (
               <span className="absolute -top-1.5 -right-1.5 bg-blue-600 border border-white text-white text-[9px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
-                {potentials.length}
+                {potentials.length + transferInconsistencies.length}
               </span>
             )}
           </button>
@@ -1035,12 +1184,12 @@ export default function TransactionsTab({
             )}
           </div>
 
-          {potentials.length === 0 ? (
+          {potentials.length === 0 && transferInconsistencies.length === 0 ? (
             <div className="py-8 text-center bg-white border border-slate-100 rounded-xl">
               <span className="text-2xl">🎉</span>
-              <h4 className="text-xs font-bold text-slate-700 mt-2">Nessun giroconto scollegato rilevato</h4>
+              <h4 className="text-xs font-bold text-slate-700 mt-2">Nessun giroconto scollegato o anomalo rilevato</h4>
               <p className="text-[10px] text-slate-400 mt-0.5 max-w-md mx-auto">
-                Tutte le transazioni con lo stesso importo e data appaiono già correttamente collegate o non presentano conflitti.
+                Tutte le transazioni di giroconto appaiono correttamente accoppiate, allineate e senza anomalie di corrispondenza.
               </p>
             </div>
           ) : (
@@ -1076,8 +1225,8 @@ export default function TransactionsTab({
                             </div>
                           </div>
                           <div className="flex items-center gap-2 justify-end">
-                            <span className="text-[10px] text-emerald-700 font-semibold bg-white border border-emerald-150 rounded-md px-2 py-1 whitespace-nowrap">
-                              Stessa ora ({getTxDateTimeInfo(pair.expense.date).timePart ? getTxDateTimeInfo(pair.expense.date).timePart.substring(0, 5) : 'Nessuna'})
+                            <span className="text-[9.5px] text-emerald-800 font-bold bg-emerald-100/60 rounded px-2 py-1 flex items-center gap-1 font-sans whitespace-nowrap">
+                              🚀 Coincidenza Perfetta
                             </span>
                             <button
                               type="button"
@@ -1137,6 +1286,105 @@ export default function TransactionsTab({
                             >
                               Collega e Certifica
                             </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* TRANSFER ANOMALIES (INCONSISTENCIES) */}
+              {transferInconsistencies.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-slate-150">
+                  <h4 className="text-[11px] font-bold text-rose-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-[pulse_1s_infinite]"></span>
+                    Anomalie & Giroconti Orfani (Mancanza Corrispettivo Opposto)
+                  </h4>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {transferInconsistencies.map((anom, idx) => {
+                      const tx = anom.transaction;
+                      const dateText = formatDateOnly(tx.date);
+                      const isOrphanTransfer = anom.type === 'orphan_transfer';
+
+                      return (
+                        <div key={idx} className="flex flex-col border border-rose-150 bg-rose-50/15 p-3.5 rounded-xl gap-2.5 hover:bg-rose-50/25 transition-all text-xs text-left">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-slate-500 font-bold bg-white px-2 py-0.5 rounded border border-slate-205 whitespace-nowrap">
+                              {dateText}
+                            </span>
+                            <span className="inline-flex items-center gap-0.5 text-[9px] bg-rose-100 text-rose-800 font-sans font-extrabold px-1 py-0.5 rounded border border-rose-200 uppercase tracking-wider">
+                              ⚠️ Giroconto Orfano
+                            </span>
+                            <span className="font-semibold text-slate-800 flex-1 truncate max-w-xs sm:max-w-sm">
+                              {tx.description}
+                            </span>
+                            <span className="font-mono font-bold text-rose-650 ml-auto whitespace-nowrap">
+                              {tx.amount > 0 ? '+' : ''}{tx.amount.toFixed(2)} €
+                            </span>
+                          </div>
+
+                          <p className="text-[10.5px] text-slate-550 font-medium leading-relaxed">
+                            {anom.reason}
+                          </p>
+
+                          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100/70">
+                            {isOrphanTransfer ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCreateMatchingCredit(tx)}
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold rounded-md transition-all cursor-pointer shadow-3xs"
+                                >
+                                  Crea Accredito Speculare su {accounts.find(a => a.id === tx.destinationAccountId)?.name || 'Conto Destinatario'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onUpdateTransaction(tx.id, { type: 'expense', destinationAccountId: null, category: 'necessarie' })}
+                                  className="px-2.5 py-1 border border-slate-200 hover:bg-slate-50 text-slate-500 text-[10px] font-bold rounded-md transition-all cursor-pointer"
+                                >
+                                  Inverti in Spesa Singola
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-[10px] text-slate-500 font-bold uppercase">Prelevato da:</span>
+                                  <select
+                                    value={selectedOrphanSource[tx.id] || ''}
+                                    onChange={(e) => setSelectedOrphanSource({...selectedOrphanSource, [tx.id]: e.target.value})}
+                                    className="text-[10px] bg-white border border-slate-200 text-slate-850 rounded px-2 py-1 outline-none"
+                                  >
+                                    <option value="">-- Scegli conto addebito --</option>
+                                    {accounts.filter(a => a.id !== tx.accountId).map(a => (
+                                      <option key={a.id} value={a.id}>{a.name}</option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const srcId = selectedOrphanSource[tx.id];
+                                      if (!srcId) {
+                                        alert("Seleziona prima il conto di origine!");
+                                        return;
+                                      }
+                                      handleCreateMatchingDebit(tx, srcId);
+                                    }}
+                                    disabled={!selectedOrphanSource[tx.id]}
+                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-750 disabled:bg-slate-100 disabled:text-slate-400 text-white text-[10px] font-bold rounded-md transition-all cursor-pointer disabled:cursor-not-allowed shadow-3xs"
+                                  >
+                                    Crea Addebito
+                                  </button>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => onUpdateTransaction(tx.id, { category: 'entrate' as any })}
+                                  className="px-2.5 py-1 border border-slate-200 hover:bg-slate-50 text-slate-500 text-[10px] font-bold rounded-md transition-all cursor-pointer"
+                                >
+                                  Inverti in Entrata Semplice
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       );
@@ -2325,7 +2573,14 @@ export default function TransactionsTab({
                 paginatedTransactions.map((tx) => {
                   const correlatedAccount = accounts.find(a => a.id === tx.accountId);
                   const isPersonal = tx.scope === 'personal';
-                  const isPositive = tx.amount >= 0;
+                  const isViewingDestinationOnly = 
+                    tx.destinationAccountId && 
+                    !selectedAccounts.includes('all') && 
+                    selectedAccounts.includes(tx.destinationAccountId) && 
+                    !selectedAccounts.includes(tx.accountId);
+
+                  const displayAmount = isViewingDestinationOnly ? Math.abs(tx.amount) : tx.amount;
+                  const isPositive = displayAmount >= 0;
 
                   // Resolve source and destination accounts for transfers/giroconti
                   let sourceAcc = correlatedAccount;
@@ -2497,7 +2752,7 @@ export default function TransactionsTab({
 
                       {/* Amount */}
                       <td className={`py-3.5 px-4 text-right font-mono font-bold ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {isPositive ? '+' : ''}{formatEuro(tx.amount)}
+                        {isPositive ? '+' : ''}{formatEuro(displayAmount)}
                       </td>
 
                       {/* Controls with explicit edit */}
